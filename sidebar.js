@@ -1,5 +1,9 @@
 /* ─── Constants ─── */
 const DATO = 'https://site-api.datocms.com';
+// DealNews's own public content API (what blog-slider and the standalone Live Feed generator call). The key is the same shared, site-wide
+// public key served to every visitor of dealnews.com (see index.html). Used only by Find offers.
+const DN_CONTENT_API = 'https://api.dealnews.com/content';
+const DN_CONTENT_API_AUTH = 'DN jxqfz29pbv9xpWSYnmJX';
 const PROC_TARGET_CLASS = 'btn-cta';
 // Matches full URL tokens containing either of DealNews's own tracking-link
 // paths — "artclick" (e.g. dealnews.com/lw/artclick.html) or the plain
@@ -414,6 +418,206 @@ async function addOfferById() {
     errEl.style.display = 'block';
   }
   if (added > 0) input.value = '';
+}
+
+/* ─── Find offers ─────────────────────────────────────────────────────────
+ * Search the site's own content API (the one blog-slider and the Live Feed
+ * generator already use) for live offers by words, category, facet or vendor,
+ * tick the ones to use, and hand their IDs to addOfferById() — so a ticked
+ * offer becomes exactly the same card as one typed in by ID. See "Find offers"
+ * in CLAUDE.md. */
+const FIND_PAGE_SIZE = 30;
+let findState = { items: [], vendors: [], remaining: 0, loaded: 0, busy: false, selected: new Set() };
+
+function findParams(offset) {
+  const p = [];
+  const text = document.getElementById('find-text').value.trim();
+  const cat  = document.getElementById('find-category').value.trim();
+  const fac  = document.getElementById('find-facet').value.trim();
+  const ven  = document.getElementById('find-vendor').value.trim();
+  if (text) p.push('search=' + encodeURIComponent(text));
+  if (cat)  p.push('category_id=' + encodeURIComponent(cat));
+  if (fac)  p.push('facet_ids=' + encodeURIComponent(fac));
+  if (ven)  p.push('vendor_id=' + encodeURIComponent(ven));
+  if (!p.length) return null;
+  if (document.getElementById('find-expired').checked) p.push('expired=1');
+  p.push('count=' + FIND_PAGE_SIZE);
+  if (offset) p.push('start=' + offset);
+  return p.join('&');
+}
+
+async function runFind(append) {
+  const msg = document.getElementById('find-msg');
+  if (findState.busy) return;
+  const qs = findParams(append ? findState.loaded : 0);
+  if (!qs) {
+    msg.textContent = 'Enter a search, a category, a facet or a vendor first.';
+    msg.className = 'msg warn';
+    return;
+  }
+  findState.busy = true;
+  document.getElementById('find-spinner').style.display = 'inline-block';
+  document.getElementById('find-btn').disabled = true;
+  msg.textContent = '';
+  try {
+    const res = await fetch(`${DN_CONTENT_API}?${qs}`, { headers: { Authorization: DN_CONTENT_API_AUTH } });
+    if (!res.ok) throw new Error(`the site's content API answered ${res.status}`);
+    const data = await res.json();
+    const got = Array.isArray(data.content) ? data.content : [];
+    if (!append) { findState.items = []; findState.selected = new Set(); }
+    const have = new Set(findState.items.map(o => String(o.id)));
+    got.forEach(o => { if (!have.has(String(o.id))) findState.items.push(o); });
+    findState.loaded += got.length;
+    if (!append) findState.loaded = got.length;
+    findState.remaining = (data.additional_content_ids || []).length;
+    if (Array.isArray(data.vendors)) findState.vendors = data.vendors;
+    if (!findState.items.length) {
+      msg.textContent = 'No live offers matched. Try fewer filters, or tick "include expired".';
+      msg.className = 'msg warn';
+    }
+  } catch (e) {
+    msg.textContent = 'Search failed: ' + e.message;
+    msg.className = 'msg err';
+  } finally {
+    findState.busy = false;
+    document.getElementById('find-spinner').style.display = 'none';
+    document.getElementById('find-btn').disabled = false;
+    renderFindResults();
+  }
+}
+
+function findEndsText(o) {
+  let ts = o.expiration_datetime_ts || o.available_end_datetime_ts || null;
+  if (o.expired) return { text: 'expired', cls: 'expired' };
+  if (!ts) return { text: 'no end date', cls: '' };
+  ts = Number(ts);
+  if (ts < 1e12) ts *= 1000;   // seconds → milliseconds
+  const d = new Date(ts);
+  const days = Math.ceil((ts - Date.now()) / 86400000);
+  const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return { text: days <= 0 ? 'ends today' : `ends ${label}`, cls: days <= 2 ? 'soon' : '' };
+}
+
+function findSortedItems() {
+  const mode = document.getElementById('find-sort').value;
+  const items = findState.items.slice();
+  if (mode === 'hot') items.sort((a, b) => (b.hotness || 0) - (a.hotness || 0));
+  if (mode === 'ending') {
+    // live offers with the nearest end first; offers with no end date, then already-expired ones (shown only when "include expired" is ticked), last
+    const end = o => {
+      if (o.expired) return Number.MAX_VALUE;
+      const t = o.expiration_datetime_ts || o.available_end_datetime_ts || Infinity;
+      return t < 1e12 ? t * 1000 : t;
+    };
+    items.sort((a, b) => end(a) - end(b));
+  }
+  return items;
+}
+
+function renderFindResults() {
+  const list = document.getElementById('find-results');
+  const chips = document.getElementById('find-vendors');
+  const bar = document.getElementById('find-bar');
+  list.textContent = '';
+  chips.textContent = '';
+  const added = new Set(offers.map(o => String(o.legacyId)));
+
+  // vendor chips: the vendors in the current results, with counts; a click filters to that vendor
+  const currentVendor = document.getElementById('find-vendor').value.trim();
+  (findState.vendors || []).slice(0, 12).forEach(v => {
+    const b = document.createElement('button');
+    b.className = 'small find-chip' + (String(v.vendor_id) === currentVendor ? ' on' : '');
+    b.textContent = `${v.short_name || v.name} (${v.count})`;
+    b.title = `Only ${v.name}`;
+    b.addEventListener('click', () => {
+      document.getElementById('find-vendor').value = String(v.vendor_id) === currentVendor ? '' : String(v.vendor_id);
+      runFind(false);
+    });
+    chips.appendChild(b);
+  });
+
+  const items = findSortedItems();
+  bar.style.display = items.length ? 'flex' : 'none';
+  items.forEach(o => {
+    const id = String(o.id);
+    const isAdded = added.has(id);
+    const row = document.createElement('label');
+    row.className = 'find-row-item' + (isAdded ? ' added' : '') + (o.expired ? ' is-expired' : '');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.disabled = isAdded;
+    cb.checked = !isAdded && findState.selected.has(id);
+    cb.addEventListener('change', () => {
+      if (cb.checked) findState.selected.add(id); else findState.selected.delete(id);
+      updateFindCount();
+    });
+    row.appendChild(cb);
+    const img = o.images && (o.images.Small || o.images.Medium || o.images.Large);
+    if (img && img.url) {
+      const im = document.createElement('img');
+      im.src = img.url; im.alt = ''; im.className = 'find-thumb';
+      row.appendChild(im);
+    }
+    const body = document.createElement('div');
+    body.className = 'find-body-text';
+    const title = document.createElement('div');
+    title.className = 'find-title';
+    title.textContent = o.headline || '(no headline)';
+    body.appendChild(title);
+    const meta = document.createElement('div');
+    meta.className = 'find-meta';
+    const ends = findEndsText(o);
+    const bits = [];
+    if (o.call_out) bits.push(o.call_out);
+    if (o.vendor && o.vendor.name) bits.push(o.vendor.name);
+    bits.push(ends.text);
+    if (o.hotness) bits.push('hotness ' + o.hotness);
+    if (Array.isArray(o.coupon_code) && o.coupon_code.length) bits.push('code');
+    bits.push('#' + id);
+    meta.textContent = bits.join(' · ');
+    if (ends.cls) meta.classList.add(ends.cls);
+    body.appendChild(meta);
+    row.appendChild(body);
+    if (isAdded) {
+      const tag = document.createElement('span');
+      tag.className = 'find-added-tag';
+      tag.textContent = 'added';
+      row.appendChild(tag);
+    }
+    list.appendChild(row);
+  });
+
+  const more = document.getElementById('find-more');
+  more.style.display = findState.remaining > 0 ? 'inline-block' : 'none';
+  more.textContent = `Load ${Math.min(findState.remaining, FIND_PAGE_SIZE)} more (${findState.remaining} left)`;
+  updateFindCount();
+}
+
+function updateFindCount() {
+  const n = findState.selected.size;
+  const btn = document.getElementById('find-add-btn');
+  btn.textContent = n ? `Add ${n} selected` : 'Add selected';
+  btn.disabled = n === 0;
+  document.getElementById('find-count').textContent = findState.items.length
+    ? `${findState.items.length} shown` + (findState.remaining ? `, ${findState.remaining} more` : '')
+    : '';
+}
+
+function findSelectAll(on) {
+  const added = new Set(offers.map(o => String(o.legacyId)));
+  findState.selected = new Set();
+  if (on) findState.items.forEach(o => { if (!added.has(String(o.id)) && !o.expired) findState.selected.add(String(o.id)); });
+  renderFindResults();
+}
+
+async function findAddSelected() {
+  const ids = Array.from(findState.selected);
+  if (!ids.length) return;
+  // same path as typing the IDs in: numeric IDs are resolved as legacy IDs, duplicates are skipped, errors are listed
+  document.getElementById('id-input').value = ids.join(', ');
+  findState.selected = new Set();
+  await addOfferById();
+  renderFindResults();
 }
 
 function removeOffer(id) {
@@ -2594,6 +2798,17 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('id-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') addOfferById();
   });
+  // Configure → Find offers
+  document.getElementById('find-btn').addEventListener('click', () => runFind(false));
+  document.getElementById('find-more').addEventListener('click', () => runFind(true));
+  ['find-text', 'find-category', 'find-facet', 'find-vendor'].forEach(id => {
+    document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') runFind(false); });
+  });
+  document.getElementById('find-sort').addEventListener('change', renderFindResults);
+  document.getElementById('find-expired').addEventListener('change', () => { if (findState.items.length) runFind(false); });
+  document.getElementById('find-all-btn').addEventListener('click',  () => findSelectAll(true));
+  document.getElementById('find-none-btn').addEventListener('click', () => findSelectAll(false));
+  document.getElementById('find-add-btn').addEventListener('click', findAddSelected);
   document.getElementById('sort-asc-btn').addEventListener('click',  () => sortOffers('asc'));
   document.getElementById('sort-desc-btn').addEventListener('click', () => sortOffers('desc'));
   document.getElementById('sort-auto-btn').addEventListener('click', () => sortOffers('auto'));
