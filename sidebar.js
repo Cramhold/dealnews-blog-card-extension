@@ -2461,9 +2461,10 @@ function initDrag() {
 /* ─── Daily counter ───
  * Today's deals written and creator picks made, for one author. Replicates the
  * queries the DealNews Offer Creator extension's Offer Manager runs for a saved
- * search filtered on Author / Creator Picks + "Today" — same publish-date field,
- * same ET day boundary, same default exclusion of automated (bulk) offers — so
- * the counts here match what those searches show. That extension can't be
+ * search filtered on Author / Creator Picks + "Today" — same ET day boundary,
+ * same default exclusion of automated (bulk) offers — so the counts here match
+ * what those searches show. Deals use the offer's first-publish date; picks use
+ * the date the pick itself was made (see fetchPicksTodayCount()). That extension can't be
  * observed directly (Chrome doesn't let one extension script another's pages),
  * so this asks DatoCMS instead. */
 const AUTHOR_MODEL_ID = '2041376';
@@ -2496,16 +2497,19 @@ async function fetchDealsTodayCount(authorId, sinceISO) {
   return json.meta?.total_count ?? 0;
 }
 
-// Block-level filtering (a pick authored by X) is only exposed by the GraphQL
-// Content Delivery API, not the CMA's /items filters.
-async function fetchPicksTodayCount(authorId, sinceISO) {
-  const query = `query PicksToday($f: OfferModelFilter) { _allOffersMeta(filter: $f) { count } }`;
-  const f = {
-    curatorsPick: { any: { curatorsPick: { author: { eq: authorId } } } },
-    curationLevel: { notIn: ['bulk', 'verified_bulk'] },
-    _firstPublishedAt: { gte: sinceISO },
-  };
-  const res = await fetch(DATO_CDA, {
+// GET/POST with a few retries on 429 (DatoCMS rate limit) — the pick-date check
+// below can make dozens of version-history requests in one refresh.
+async function datoRequest(url, opts, maxRetries = 4) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, opts);
+    if (res.status !== 429 || attempt >= maxRetries) return res;
+    const resetMs = parseInt(res.headers.get('x-ratelimit-reset') || '3', 10) * 1000;
+    await new Promise(r => setTimeout(r, resetMs + Math.random() * 500));
+  }
+}
+
+async function datoCdaQuery(query, variables) {
+  const res = await datoRequest(DATO_CDA, {
     method: 'POST',
     headers: {
       'Authorization': 'Bearer ' + getToken(),
@@ -2513,13 +2517,100 @@ async function fetchPicksTodayCount(authorId, sinceISO) {
       'Accept': 'application/json',
       'X-Environment': 'main',
     },
-    body: JSON.stringify({ query, variables: { f } }),
+    body: JSON.stringify({ query, variables }),
   });
   const json = await res.json().catch(() => null);
   if (!res.ok || json?.errors) {
     throw new Error(json?.errors?.[0]?.message || `DatoCMS ${res.status}`);
   }
-  return json.data?._allOffersMeta?.count ?? 0;
+  return json.data;
+}
+
+/* Picks are counted by when the pick was MADE, not when the offer was published
+ * (an older offer picked today counts; a pick on a newly published offer made
+ * yesterday doesn't). DatoCMS keeps no timestamp on a pick block, so — like the
+ * Offer Creator's "pick date" mode — it's read from version history: a pick's
+ * date is the oldest version of the offer that holds the block's ID (editing a
+ * pick keeps its ID; removing and re-adding one gives it a new ID). A pick made
+ * today means the offer was saved today, so `_updatedAt >= since` narrows the
+ * candidates before any history is read. */
+const PICK_CANDIDATE_PAGE = 500;
+const PICK_MAX_CANDIDATES = 1000;
+const PICK_HISTORY_CONCURRENCY = 4;
+
+// versions: newest first, each { at: ms, blocks: [block IDs] }. Returns
+// { decided, at }: at = when the pick was made if on/after sinceMs, null if it
+// predates sinceMs. Undecided means older versions are still needed.
+function pickCreatedAt(versions, blockId, sinceMs, exhausted) {
+  let last = null;
+  for (const v of versions) {
+    if (v.blocks.includes(blockId)) {
+      if (v.at < sinceMs) return { decided: true, at: null };
+      last = v.at;
+    } else {
+      if (last !== null) return { decided: true, at: last };
+      // Not seen yet (e.g. removed in a newer unpublished edit) and already before the cutoff.
+      if (v.at < sinceMs) return { decided: true, at: null };
+    }
+  }
+  return exhausted ? { decided: true, at: last } : { decided: false, at: null };
+}
+
+// One time per block ID: ms when it was picked, or null if before sinceMs.
+async function fetchPickTimes(itemId, blockIds, sinceMs) {
+  const versions = [];
+  for (let off = 0; ; off += 50) {
+    const res = await datoRequest(`${DATO}/items/${itemId}/versions?page[limit]=50&page[offset]=${off}`, { headers: datoHeaders() });
+    if (!res.ok) throw new Error(`version history ${res.status}`);
+    const json = await res.json();
+    const page = (json.data || []).map(v => ({
+      at: Date.parse(v.meta?.created_at),
+      blocks: Array.isArray(v.attributes?.curators_pick)
+        ? v.attributes.curators_pick.map(b => (b && typeof b === 'object') ? b.id : b)
+        : [],
+    }));
+    versions.push(...page);
+    const exhausted = page.length < 50;
+    const results = blockIds.map(id => pickCreatedAt(versions, id, sinceMs, exhausted));
+    if (results.every(r => r.decided)) return results.map(r => r.at);
+  }
+}
+
+// Block-level filtering (a pick authored by X) is only exposed by the GraphQL
+// Content Delivery API, not the CMA's /items filters, so candidates come from
+// there and their pick dates from the CMA's version history.
+async function fetchPicksTodayCount(authorId, sinceISO) {
+  const sinceMs = Date.parse(sinceISO);
+  const query = `query PickCandidates($f: OfferModelFilter, $first: IntType, $skip: IntType) {
+    allOffers(filter: $f, orderBy: [_updatedAt_DESC], first: $first, skip: $skip) { id curatorsPick { id author { id } } }
+    _allOffersMeta(filter: $f) { count }
+  }`;
+  const f = {
+    curatorsPick: { any: { curatorsPick: { author: { eq: authorId } } } },
+    curationLevel: { notIn: ['bulk', 'verified_bulk'] },
+    _updatedAt: { gte: sinceISO },
+  };
+  const rows = [];
+  for (let skip = 0; skip < PICK_MAX_CANDIDATES; skip += PICK_CANDIDATE_PAGE) {
+    const data = await datoCdaQuery(query, { f, first: PICK_CANDIDATE_PAGE, skip });
+    const page = data.allOffers || [];
+    rows.push(...page);
+    if (page.length < PICK_CANDIDATE_PAGE || rows.length >= (data._allOffersMeta?.count ?? 0)) break;
+  }
+
+  // Counts offers carrying at least one of this author's picks made today.
+  let count = 0, next = 0;
+  const worker = async () => {
+    while (next < rows.length) {
+      const row = rows[next++];
+      const blockIds = (row.curatorsPick || []).filter(b => b?.id && b.author?.id === authorId).map(b => b.id);
+      if (!blockIds.length) continue;
+      const times = await fetchPickTimes(row.id, blockIds, sinceMs);
+      if (times.some(t => t !== null && t >= sinceMs)) count++;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(PICK_HISTORY_CONCURRENCY, rows.length) }, worker));
+  return count;
 }
 
 function setCountStat(key, value, error) {
