@@ -103,6 +103,37 @@
       <p class="msg" id="add-progress" style="display:none;color:var(--text-muted);"></p>
       <p class="msg err" id="add-err" style="display:none;"></p>
 
+      <details class="find-panel" id="find-panel">
+        <summary>Find offers to add</summary>
+        <p class="find-help">Searches the site's live offers (the same feed the programmatic pages use). Tick the ones you want, then Add selected: they go through the same path as typing their IDs above.</p>
+        <div class="find-grid">
+          <input type="text" id="find-text" placeholder="Words, e.g. peacock student" />
+          <input type="text" id="find-category" placeholder="Category ID" inputmode="numeric" />
+          <input type="text" id="find-facet" placeholder="Facet ID" inputmode="numeric" />
+          <input type="text" id="find-vendor" placeholder="Vendor ID" inputmode="numeric" />
+        </div>
+        <div class="find-controls">
+          <button id="find-btn" class="primary">Find</button>
+          <span class="spinner" id="find-spinner" style="display:none;"></span>
+          <label class="find-check"><input type="checkbox" id="find-expired" /> include expired</label>
+          <select id="find-sort">
+            <option value="site">Site order</option>
+            <option value="hot">Hottest first</option>
+            <option value="ending">Ending soonest</option>
+          </select>
+        </div>
+        <p class="msg" id="find-msg"></p>
+        <div class="find-chips" id="find-vendors"></div>
+        <div class="find-bar" id="find-bar" style="display:none;">
+          <button class="small" id="find-all-btn">Select all</button>
+          <button class="small" id="find-none-btn">None</button>
+          <span class="find-count" id="find-count"></span>
+          <button class="small primary" id="find-add-btn" disabled>Add selected</button>
+        </div>
+        <div id="find-results"></div>
+        <button class="small" id="find-more" style="display:none;"></button>
+      </details>
+
       <hr>
 
       <div class="empty" id="offers-empty">No offers added yet.</div>
