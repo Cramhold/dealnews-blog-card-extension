@@ -848,3 +848,24 @@ tr.row-locked .pos-input { opacity: 0.4; pointer-events: none; }
 .find-meta.soon { color: var(--orange); }
 .find-meta.expired { color: var(--red); }
 .find-added-tag { font-size: 10px; color: var(--success); flex: none; }
+
+/* ─── Creator Pick style (Configure > Edit options, Preview, table badge) ─── */
+.sort-bar-sub { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.cp-nopick {
+  display: inline-block; margin-left: 4px; padding: 0 5px; font-size: 9px; font-weight: 600;
+  color: var(--orange); border: 1px solid var(--orange); border-radius: 8px; white-space: nowrap;
+}
+/* Preview tile: the card's colors are picked for the site's white page, so it
+   keeps a white ground and dark text in the sidebar's dark theme too. */
+.cp-preview {
+  background: #fff; color: #303437; border: 1px solid var(--border); border-radius: 6px;
+  padding: 0 10px; font: 300 14px/18px Roboto, Helvetica, Arial, sans-serif;
+}
+.cp-preview a { color: #2c65af; text-decoration: none; }
+.cp-preview .bu-card:last-child { border-bottom: 0 !important; }
+.cp-preview h3 { font-family: Roboto, Helvetica, Arial, sans-serif; }
+.cp-preview .btn-cta {
+  display: inline-block; background: #fff; color: #00a863; font: 500 14px/36px Roboto, sans-serif;
+  text-transform: uppercase; padding: 0 12px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+  white-space: nowrap; text-decoration: none;
+}

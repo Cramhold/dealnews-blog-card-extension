@@ -28,8 +28,10 @@ const EXPIRED_GROUP_CTA_TEXT = 'Expired Promo';
 /* ─── State ─── */
 let offers = [];
 let cardLayout = 'grid'; // 'grid' | 'vertical' — see setCardLayout()
-let cardStyle  = 'standard'; // 'standard' | 'compact' (experimental) — see generateHTML()
+let cardStyle  = 'standard'; // 'standard' | 'compact' (experimental) | 'pick' (Creator Pick) — see generateHTML()
 let showImages = true;       // false drops each card's image column entirely — see generateHTML()
+let cpBar      = true;       // Creator Pick style: emit the sort + creator-filter bar (script) — see "Creator Pick card"
+let cpEndDates = true;       // Creator Pick style: show "Ends Mon D" on cards whose offer has an end date
 let articleOriginalHTML  = '';
 let articleCards         = [];
 let articleHTMLModified  = false; // set by edits that don't flag/reorder anything — see removeAndRegenerate()
@@ -287,7 +289,13 @@ async function fetchOffer(id) {
   // itself never has to look this up separately for data-iref generation.
   const legacyId       = attrs.legacy_id != null ? String(attrs.legacy_id) : '0';
 
-  const [imageUrl, vendorLegacyId] = await Promise.all([
+  // Creator Pick fields (see "Creator Pick card" in CLAUDE.md). All optional —
+  // an offer with no pick just gets pick: null, and every other card style
+  // ignores these fields entirely.
+  const pickBlockList = pickBlocks(attrs.curators_pick);
+  const meta          = (json.data || json).meta || {};
+
+  const [imageUrl, vendorInfo, authors] = await Promise.all([
     (async () => {
       const uploadId = attrs.image?.upload_id;
       if (!uploadId) return null;
@@ -298,18 +306,84 @@ async function fetchOffer(id) {
         return imgJson.data?.attributes?.url || null;
       } catch { return null; }
     })(),
-    (async () => {
-      if (!vendorDatoId) return '0';
-      try {
-        const vRes = await fetch(`${DATO}/items/${vendorDatoId}`, { headers });
-        if (!vRes.ok) return '0';
-        const vJson = await vRes.json();
-        return String(vJson.data?.attributes?.legacy_id ?? '0');
-      } catch { return '0'; }
-    })(),
+    fetchVendor(vendorDatoId, headers),
+    Promise.all(pickBlockList.map(b => fetchAuthor(b.author, headers))),
   ]);
 
-  return { id, title, callout, landingUrl, monetizedUrl, vendor: vendorLegacyId, valueStatement, imageUrl, legacyId };
+  const num = v => (v === null || v === undefined || v === '' || isNaN(Number(v))) ? null : Number(v);
+  // One entry per creator, in the CMS order. why_buy is a plain string field;
+  // anything else (or whitespace) is not a usable quote, and that pick is skipped.
+  const picks = pickBlockList.map((b, i) => ({
+    quote: typeof b.why_buy === 'string' ? b.why_buy.trim() : '',
+    authorName: authors[i]?.name || '',
+    authorLegacyId: authors[i]?.legacyId || '',
+    authorImage: authors[i]?.image || null,
+  })).filter(p => p.quote);
+
+  return {
+    id, title, callout, landingUrl, monetizedUrl, vendor: vendorInfo.legacyId, valueStatement, imageUrl, legacyId,
+    vendorName: vendorInfo.name,
+    price: num(attrs.price),            // -1 / null when the offer has no single price (sale events)
+    wasPrice: num(attrs.comparison_price), // price before the discount
+    shipping: attrs.shipping_text || '',
+    endISO: attrs.expiration_datetime || '',
+    pubISO: meta.first_published_at || '',
+    picks,
+  };
+}
+
+// The pick lives in the offer's modular-content field `curators_pick`. With
+// nested=true its blocks come back as objects (like `content` above); each pick
+// carries why_buy (the quote) and author (a link to the Author record). An offer
+// can have two picks (two creators).
+function pickBlocks(blocks) {
+  if (!Array.isArray(blocks)) return [];
+  return blocks.map(b => b?.attributes || b).filter(a => a && typeof a === 'object' && 'why_buy' in a);
+}
+
+// Author and vendor records are shared by many offers, so each is fetched once
+// per session. The promise is cached so concurrent adds share one request, but
+// a failed lookup is evicted, so a transient error (429, offline) doesn't blank
+// that creator or store for the rest of the session.
+function cachedLookup(cache, key, load) {
+  if (cache.has(key)) return cache.get(key);
+  const p = load().then(result => { if (!result) cache.delete(key); return result; },
+                        () => { cache.delete(key); return null; });
+  cache.set(key, p);
+  return p;
+}
+
+// Returns { name, legacyId, image } or null.
+const authorCache = new Map();
+function fetchAuthor(authorId, headers) {
+  if (!authorId || typeof authorId !== 'string') return Promise.resolve(null);
+  return cachedLookup(authorCache, authorId, async () => {
+    const res = await fetch(`${DATO}/items/${authorId}`, { headers });
+    if (!res.ok) return null;
+    const a = (await res.json()).data?.attributes || {};
+    let image = null;
+    const uploadId = a.image?.upload_id;
+    if (uploadId) {
+      const r = await fetch(`${DATO}/uploads/${uploadId}`, { headers });
+      if (r.ok) image = (await r.json()).data?.attributes?.url || null;
+    }
+    return { name: a.name || '', legacyId: a.legacy_id != null ? String(a.legacy_id) : '', image };
+  });
+}
+
+// Returns { legacyId, name }; { '0', '' } when there is no vendor or the lookup
+// fails (the existing "0 = no value" convention for vendor/brand/category).
+const vendorCache = new Map();
+const NO_VENDOR = { legacyId: '0', name: '' };
+async function fetchVendor(vendorDatoId, headers) {
+  if (!vendorDatoId) return NO_VENDOR;
+  const found = await cachedLookup(vendorCache, vendorDatoId, async () => {
+    const res = await fetch(`${DATO}/items/${vendorDatoId}`, { headers });
+    if (!res.ok) return null;
+    const va = (await res.json()).data?.attributes || {};
+    return { legacyId: String(va.legacy_id ?? '0'), name: va.name || '' };
+  });
+  return found || NO_VENDOR;
 }
 
 async function resolveLegacyId(legacyId) {
@@ -697,7 +771,7 @@ function descEditorRowHTML(o) {
   const restore = o.valueStatementOriginal !== undefined
     ? `<button class="small" data-action="restore-desc" data-id="${esc(o.id)}">↺ Restore original</button>`
     : '';
-  return `<tr class="desc-row"><td colspan="8">${rows}${restore}</td></tr>`;
+  return `<tr class="desc-row"><td colspan="9">${rows}${restore}</td></tr>`;
 }
 
 function moveOffer(id, rawVal) {
@@ -747,14 +821,45 @@ function setCardLayout(layout) {
   renderHTMLOut();
 }
 
-// Both toggles only change how generateHTML()/renderPreview() render the
-// existing `offers` — nothing about the offers list itself is touched, so
-// flipping back and forth never loses setup work.
+// The style, image and Creator Pick option toggles only change how
+// generateHTML()/renderPreview() render the existing `offers` — nothing about
+// the offers list itself is touched, so flipping back and forth never loses
+// setup work.
 function setCardStyle(style) {
   cardStyle = style;
-  ['standard', 'compact'].forEach(k =>
+  ['standard', 'compact', 'pick'].forEach(k =>
     document.getElementById('style-' + k + '-btn').classList.toggle('active', k === style)
   );
+  // Creator Pick has its own options (page script bar, end dates) and a
+  // different default button wording, so the table and bar need a redraw too.
+  document.getElementById('pick-options').style.display = style === 'pick' ? 'flex' : 'none';
+  // Pick cards are always one per row, so the Grid/Vertical choice doesn't apply.
+  document.getElementById('layout-bar').style.display = style === 'pick' ? 'none' : '';
+  renderOffers();
+  renderPreview();
+  renderHTMLOut();
+}
+
+function setCpBar(on) {
+  cpBar = on;
+  document.getElementById('cp-bar-on-btn').classList.toggle('active', on);
+  document.getElementById('cp-bar-off-btn').classList.toggle('active', !on);
+  renderPreview();
+  renderHTMLOut();
+}
+
+function setCpEndDates(on) {
+  cpEndDates = on;
+  document.getElementById('cp-end-on-btn').classList.toggle('active', on);
+  document.getElementById('cp-end-off-btn').classList.toggle('active', !on);
+  renderPreview();
+  renderHTMLOut();
+}
+
+function toggleHideEnd(id) {
+  const offer = offers.find(o => o.id === id);
+  if (offer) offer.hideEnd = !offer.hideEnd;
+  renderOffers();
   renderPreview();
   renderHTMLOut();
 }
@@ -826,6 +931,12 @@ function sortOffers(direction) {
   renderOffers();
 }
 
+// Table badge for Creator Pick style: an offer with no usable pick gets a plain
+// card (no creator or quote).
+function pickBadgeHTML(o) {
+  return (o.picks && o.picks.length) ? '' : ' <span class="cp-nopick" title="No Creator Pick found on this offer, so its card will have no creator or quote.">no pick</span>';
+}
+
 /* ─── Render Configure table ─── */
 function renderOffers() {
   const tbody   = document.getElementById('offers-tbody');
@@ -853,13 +964,17 @@ function renderOffers() {
         <input class="pos-input" type="number" min="1" max="${offers.length}"
           value="${i + 1}" data-id="${o.id}" ${o.locked ? 'disabled' : ''} />
       </td>
-      <td class="cell-trunc">${esc(o.title)}</td>
+      <td class="cell-trunc">${esc(o.title)}${cardStyle === 'pick' ? pickBadgeHTML(o) : ''}</td>
       <td class="cell-muted" style="font-size:11px;">${esc(o.callout)}</td>
-      <td><input class="cta-input" value="${esc(o.ctaText || 'Buy Now')}" data-id="${o.id}" /></td>
+      <td><input class="cta-input" value="${esc(ctaTextFor(o))}" data-id="${o.id}" /></td>
       <td><button class="lock-btn ${o.locked ? 'locked' : ''}" data-action="lock" data-id="${o.id}"
             title="${o.locked ? 'Unlock position' : 'Lock position'}">${o.locked ? '🔒' : '🔓'}</button></td>
-      <td><button class="lock-btn ${o.editingDesc || o.valueStatementOriginal !== undefined ? 'locked' : ''}" data-action="edit-desc" data-id="${o.id}"
-            title="Edit description — remove parts of it">✂</button></td>
+      <td>${cardStyle === 'pick' ? '' : `<button class="lock-btn ${o.editingDesc || o.valueStatementOriginal !== undefined ? 'locked' : ''}" data-action="edit-desc" data-id="${o.id}"
+            title="Edit description — remove parts of it">✂</button>`}</td>
+      <td>${cardStyle === 'pick' && o.endISO
+        ? `<button class="lock-btn ${o.hideEnd ? 'locked' : ''}" data-action="toggle-end" data-id="${o.id}"
+            title="${o.hideEnd ? 'End date hidden on this card — click to show it' : 'Showing the end date (' + esc(cpEndLabel(o.endISO)) + ') — click to hide it on this card'}">📅</button>`
+        : ''}</td>
       <td><button class="danger-text" data-action="remove" data-id="${o.id}">Remove</button></td>
     </tr>${o.editingDesc ? descEditorRowHTML(o) : ''}`).join('');
   initDrag();
@@ -873,6 +988,17 @@ function renderPreview() {
   empty.style.display = 'none';
 
   container.innerHTML = offers.map(o => {
+    // Creator Pick: show the real generated card (same markup the HTML tab
+    // emits, minus tracking attributes) on a white tile, since its colors are
+    // chosen for the site's white page. The page script doesn't run here, so
+    // long quotes show in full and there is no sort bar — both only exist on
+    // the published page.
+    if (cardStyle === 'pick') {
+      return `<div class="card-wrap">
+      <div class="card-id">${o.id} <button class="danger-text" data-action="remove" data-id="${o.id}">Remove</button></div>
+      <div class="cp-preview">${pickCardHTML(o, '')}</div>
+    </div>`;
+    }
     const url = o.monetizedUrl || o.landingUrl || '#';
     const imgHtml = o.imageUrl
       ? `<img src="${esc(o.imageUrl)}" alt="${esc(o.title)}">`
@@ -884,7 +1010,7 @@ function renderPreview() {
       : `<h3 class="card-h3"><a href="${esc(url)}" target="_blank">${esc(o.title)}</a></h3>
           <div class="card-price">${esc(o.callout)}</div>`;
     const cta = `<div class="card-cta-wrap">
-            <a href="${esc(url)}" target="_blank" class="card-cta">${esc(o.ctaText || 'Buy Now')}</a>
+            <a href="${esc(url)}" target="_blank" class="card-cta">${esc(ctaTextFor(o))}</a>
             <button class="danger-text" data-action="remove" data-id="${o.id}" style="flex-shrink:0;">Remove</button>
           </div>`;
     const desc = `<div class="card-desc">${o.valueStatement || ''}</div>`;
@@ -899,6 +1025,9 @@ function renderPreview() {
       </div>
     </div>`;
   }).join('');
+  // The sidebar must never navigate to a card's link (that would lose the
+  // in-memory offers list), so Creator Pick preview links open in a new tab.
+  container.querySelectorAll('.cp-preview a').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
 }
 
 /* ─── Generate HTML ─── */
@@ -955,9 +1084,11 @@ function findCardLinks(cardEl) {
   const title = h3 ? h3.querySelector('a') : null;
   const button = cardEl.querySelector('.' + PROC_TARGET_CLASS);
   const image = Array.from(cardEl.querySelectorAll('a')).find(a =>
-    !(h3 && h3.contains(a)) && a !== button && !a.closest('.bu-content')
+    !(h3 && h3.contains(a)) && a !== button && !a.closest('.bu-content, .cp-quote')
   ) || null;
-  return { image, title, button };
+  // Creator Pick cards: one link per creator (none on other card styles).
+  const creators = Array.from(cardEl.querySelectorAll('a.cp-pill'));
+  return { image, title, button, creators };
 }
 
 // Headline text without the inline callout — compact-style cards fold the
@@ -980,7 +1111,7 @@ function cardCalloutText(priceEl) {
   return priceEl.closest('h3') ? text.replace(/^(for|[–—-])\s+/i, '') : text;
 }
 
-function analyzeIrefTags(imageLinkEl, titleLinkEl, ctaLinkEl) {
+function analyzeIrefTags(imageLinkEl, titleLinkEl, ctaLinkEl, creatorLinkEls = []) {
   const links = [['image', imageLinkEl], ['title', titleLinkEl], ['button', ctaLinkEl]];
   const missing = [];
   const mismatched = [];
@@ -992,6 +1123,13 @@ function analyzeIrefTags(imageLinkEl, titleLinkEl, ctaLinkEl) {
     if (!val) { missing.push(type); return; }
     if (!val.endsWith(`-${type}`)) mismatched.push(type);
   });
+  // Creator Pick cards carry a fourth tracked link per creator. A card with no
+  // creator link (other styles, or a creator with no page) has nothing to check.
+  if (creatorLinkEls.length) {
+    const vals = creatorLinkEls.map(el => el.getAttribute('data-iref'));
+    if (vals.some(v => !v)) missing.push('creator');
+    else if (vals.some(v => !v.endsWith('-creator'))) mismatched.push('creator');
+  }
   return { missing, mismatched };
 }
 
@@ -1047,8 +1185,402 @@ function compactHeadlineText(title, callout) {
   return p.after ? `${p.before} ${p.callout} ${p.after}` : `${p.before} ${p.connector} ${p.callout}`;
 }
 
+/* ─── Creator Pick card ───────────────────────────────────────────────────
+ * A compact card for offers that carry a Creator Pick, built for a page with
+ * many picks (Black Friday / Cyber Monday) read mostly on phones. Layout is one
+ * wrapping flex row with NO media queries (inline styles only): image | headline
+ * + price + store/shipping/end date | creator pill above the "Why I picked it"
+ * quote | button. Wide, everything sits on one row (~130-190px tall); on a phone
+ * the quote and button wrap under the image row (~260-300px). See "Creator Pick
+ * card" in CLAUDE.md for the decisions behind it.
+ *
+ * Hooks other code depends on are classes, because class names are known to
+ * survive the CMS save: cp-list / cp-sort / cp-card / cp-pill / cp-quote /
+ * cp-qtext are read by the page script; the Article tab reads bu-card,
+ * content-call-out, btn-cta, the h3 link and cp-qtext (see parseAndDisplayCards()).
+ * The data-* values the sort reads are extras the script degrades without. */
+
+// Palette and sizes for the card markup. Everything is inline-styled (the CMS
+// takes only inline styles), so this is the one place to retune them. The page
+// script below keeps its own copies of the few it needs, because it ships as
+// standalone text and cannot see these.
+const CP = {
+  link: '#2c65af', muted: '#5b6066', was: '#6b7075', price: '#00a863',
+  pillBg: '#d7eaf8', pillInk: '#214b82', rule: '#e3e3e3', image: 88, face: 32,
+};
+
+// Height (px) of the sort bar the page script builds, reserved in the HTML as an
+// empty slot so the bar appears without pushing the list down (layout shift).
+// Measured in the test harness at 320-1024px wide: the bar is this tall when it
+// has creator chips ("chips") and when it doesn't ("plain"); the script gives the
+// bar the same minimum height as the slot, so the two always match.
+const CP_BAR_HEIGHT = { chips: 88, plain: 50 };
+
+// Visually hidden but read by screen readers (the struck-through price needs a
+// "was" cue because <s> is not announced).
+const CP_SR_ONLY = 'position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;';
+
+// Button wording: a single priced product reads "Buy Now"; a sale event or
+// anything without a real price reads "Shop Now". Only applies to the Creator
+// Pick style, and only until someone types their own text in the table.
+function ctaTextFor(o, style = cardStyle) {
+  if (o.ctaText) return o.ctaText;
+  if (style === 'pick' && o.price !== undefined && !(o.price > 0)) return 'Shop Now';
+  return 'Buy Now';
+}
+
+// "M.A. Clancy" -> "M-A-Clancy", the slug shape on the site's creator pages
+// (https://www.dealnews.com/creators/M-A-Clancy/158.html). Creator pages, NOT
+// /authors/...: the old author URLs now 301 to the creators hub, so linking
+// them would drop the reader on the hub instead of the person's page. Returns
+// '' (no link) when a usable slug or ID is missing.
+function cpCreatorUrl(name, legacyId) {
+  if (!name || !legacyId) return '';
+  const slug = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug ? `https://www.dealnews.com/creators/${slug}/${legacyId}.html` : '';
+}
+
+// Product and creator images are full-size uploads (often 1000-2400px, shown at
+// 88px and 32px). Both image hosts the site uses (the CMS asset host and
+// d.dlnws.com) resize on request with the same w/h parameters, fitting the image
+// inside the box without cropping, so ask for twice the display size (sharp on
+// high-density screens) instead. auto=format lets the CMS host send a smaller
+// modern format; the site's own host ignores it.
+function cpResizedUrl(url, displayPx) {
+  if (!url) return '';
+  return url + (url.includes('?') ? '&' : '?') + `w=${displayPx * 2}&h=${displayPx * 2}&auto=format`;
+}
+
+function cpMoney(n) {
+  const whole = Math.round(n * 100) % 100 === 0;
+  return '$' + n.toLocaleString('en-US', whole ? { maximumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Fixed date only (never "ends in 3 hours" — the card is static HTML). ET day,
+// since the offer's end time is stored with the newsroom's UTC offset.
+function cpEndLabel(iso) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d)) return '';
+  return 'Ends ' + d.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' });
+}
+
+function cpHasWasPrice(o) { return o.price > 0 && o.wasPrice > o.price; }
+
+// An end date is shown (and sortable) only when the editor hasn't hidden it.
+function cpShowsEnd(o) { return cpEndDates && !o.hideEnd && !!o.endISO; }
+
+function cpMetaLine(o) {
+  const ship = o.shipping ? o.shipping.charAt(0).toUpperCase() + o.shipping.slice(1) : '';
+  return [o.vendorName, ship, cpShowsEnd(o) ? cpEndLabel(o.endISO) : ''].filter(Boolean).join(' · ');
+}
+
+// Every attribute value below comes from the CMS, so it is escaped with esc()
+// (which also encodes quotes); the older card styles interpolate URLs raw.
+// `tracking` is the creator link's data-iref attribute (or '').
+function cpPillHTML(pick, tracking) {
+  if (!pick.authorName) return '';
+  const nameAttr = esc(pick.authorName);
+  const nameText = escText(pick.authorName);
+  // The photo is decorative (the name sits right next to it), so empty alt.
+  const face = pick.authorImage
+    ? `<img src="${esc(cpResizedUrl(pick.authorImage, CP.face))}" alt="" width="${CP.face}" height="${CP.face}" decoding="async" style="width: ${CP.face}px; height: ${CP.face}px; border-radius: 50%; object-fit: cover;">`
+    : '';
+  const style = `display: inline-flex; align-items: center; gap: 8px; background: ${CP.pillBg}; color: ${CP.pillInk}; border-radius: 24px; padding: 3px 14px 3px ${face ? '3px' : '14px'}; font: 500 14px/18px Roboto, sans-serif; margin-bottom: 6px;`;
+  const url = cpCreatorUrl(pick.authorName, pick.authorLegacyId);
+  return url
+    ? `<a class="cp-pill" href="${esc(url)}" title="${nameAttr}"${tracking} style="${style}">${face}${nameText}</a>`
+    : `<span class="cp-pill" style="${style}">${face}${nameText}</span>`;
+}
+
+// One block per creator, each creator's pill directly above their own quote, so
+// a reader can tell whose words are whose (an offer can carry two picks). Blocks
+// after the first get a rule above them. .cp-pick is one creator's block;
+// .cp-qtext is the part the page script clamps.
+function cpQuoteHTML(picks, tracking) {
+  const label = `<b style="font: 700 11px/16px Roboto, sans-serif; letter-spacing: .06em; color: ${CP.muted}; text-transform: uppercase;">Why I picked it</b>`;
+  const blocks = picks.map((pick, i) => {
+    const rule = i ? ` style="border-top: 1px solid ${CP.rule}; margin-top: 8px; padding-top: 8px;"` : '';
+    return `<div class="cp-pick"${rule}>${cpPillHTML(pick, tracking)}<div class="cp-qtext">${label} “${escText(pick.quote)}”</div></div>`;
+  }).join('');
+  return `\n            <div class="cp-quote" style="flex: 2 1 320px; min-width: 0; font-size: 14px; font-weight: 400; line-height: 20px;">${blocks}</div>`;
+}
+
+function pickCardHTML(o, blogContentId) {
+  const href    = esc(o.monetizedUrl || o.landingUrl || '');
+  const landing = esc(o.landingUrl || o.monetizedUrl || '');
+  const title   = esc(o.title);
+  // The monetized links (image, title, button) share every attribute except the
+  // tracking value; the creator link goes to the creator's page and has its own.
+  const track = type => buildDataIref(blogContentId, o.legacyId, type);
+  const link = type =>
+    `href="${href}" landing_url="${landing}" vendor="${esc(o.vendor || '0')}" brand="0" category="0" title="${title}"${track(type)}`;
+
+  // Explicit width/height reserve the space before the image loads; contain
+  // keeps the whole product visible, centered, whatever its proportions.
+  const image = (showImages && o.imageUrl)
+    ? `<a ${link('image')} style="flex: 0 0 ${CP.image}px; height: ${CP.image}px;"><img src="${esc(cpResizedUrl(o.imageUrl, CP.image))}" alt="${title}" width="${CP.image}" height="${CP.image}" decoding="async" style="width: ${CP.image}px; height: ${CP.image}px; object-fit: contain;"></a>`
+    : '';
+
+  const was = cpHasWasPrice(o)
+    ? ` <s style="font: 400 14px Roboto, sans-serif; color: ${CP.was}; margin-left: 4px;"><span style="${CP_SR_ONLY}">was </span>${cpMoney(o.wasPrice)}</s>` : '';
+  const meta = cpMetaLine(o);
+  const metaLine = meta ? `\n                <div style="font-size: 13px; font-weight: 400; line-height: 18px; color: ${CP.muted};">${escText(meta)}</div>` : '';
+  const ctaText = ctaTextFor(o);
+  const button = `<a class="btn btn-cta bu-m-0" ${link('button')} aria-label="${esc(ctaText)}: ${title}" style="flex: none; margin-left: auto; align-self: center;">${escText(ctaText)}</a>`;
+
+  // Numbers the page script sorts on; blank when absent (or, for the end date,
+  // when the editor hid it, so a hidden placeholder date can't affect the sort).
+  const ms = iso => { const n = iso ? Date.parse(iso) : NaN; return Number.isNaN(n) ? '' : n; };
+  const dataAttrs = [
+    `data-offer-id="${esc(o.id)}"`,
+    `data-price="${o.price > 0 ? o.price : ''}"`,
+    `data-pub="${ms(o.pubISO)}"`,
+    `data-end="${cpShowsEnd(o) ? ms(o.endISO) : ''}"`,
+  ].join(' ');
+
+  const picks = o.picks || [];
+  return `      <div class="bu-card shadow-depth-0 cp-card" ${dataAttrs} style="border-bottom: 1px solid ${CP.rule};">
+        <div class="bu-card-content" style="padding: 12px 0;">
+          <div style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-start;">
+            ${image}
+            <div style="flex: 1 1 180px; min-width: 0;">
+              <h3 style="font-size: 17px; line-height: 22px; font-weight: 500; margin: 0;">
+                <a ${link('title')}>${escText(o.title)}</a>
+              </h3>
+              <div style="margin-top: 2px;"><span class="content-call-out" style="font: 700 22px/28px 'Roboto Condensed', sans-serif; color: ${CP.price};">${escText(o.callout)}</span>${was}</div>${metaLine}
+            </div>${picks.length ? cpQuoteHTML(picks, track('creator')) : ''}
+            ${button}
+          </div>
+        </div>
+      </div>`;
+}
+
+// The empty slot that holds the sort bar. Reserving the bar's height in the HTML
+// means the script fills it instead of pushing the list down. The bar is taller
+// when there are creator chips, which only appear for two or more creators.
+function cpBarSlotHTML() {
+  const creators = new Set();
+  offers.forEach(o => (o.picks || []).forEach(p => { if (p.authorName) creators.add(p.authorName); }));
+  const h = creators.size > 1 ? CP_BAR_HEIGHT.chips : CP_BAR_HEIGHT.plain;
+  return `      <div class="cp-bar-slot" style="min-height: ${h}px;"></div>\n`;
+}
+
+// The page script. It is a real function so it is syntax-highlighted, lintable
+// and testable here; CP_PAGE_SCRIPT below turns its source into the text that
+// ships after the list. It never runs in the sidebar. Progressive enhancement:
+// it trims long quotes to 3 lines with an inline "more"/"less" and, when the
+// list carries the cp-sort class, adds creator-face filter chips and a "Sort by"
+// menu above the cards. With the script blocked or stripped, the cards still
+// show in order with full quotes.
+//
+// Constraints on this function's source: DOM calls and textContent only, no
+// tag-shaped text and no less-than sign directly before a letter (the CMS save
+// mangles scripts that contain it, see "Live Feed Generator" in CLAUDE.md), no
+// references to anything outside the function (it is stringified), and ES5 style.
+function cpPageScript() {
+  var CLAMP = 'display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden';
+  var BASE = 'background:none;border:0;margin:0;font:500 14px/20px Roboto,sans-serif;color:#2c65af;cursor:pointer;';
+  // Collapsed: "more" floats at the end of the last visible line (24px tall to
+  // be a comfortable target). Open: "less" sits under the text.
+  var SHUT = BASE + 'position:absolute;right:0;bottom:-2px;padding:2px 0 2px 28px;background:linear-gradient(to right,rgba(255,255,255,0),#fff 45%)';
+  var OPEN = BASE + 'display:block;padding:2px 0';
+  var RULE = '1px solid #e3e3e3';
+  var INK = '#214b82';
+
+  Array.prototype.forEach.call(document.querySelectorAll('.cp-list'), function (list) {
+    if (list.cpReady) return; // two scripts on one page must not set a list up twice
+    list.cpReady = true;
+    var cards = Array.prototype.slice.call(list.querySelectorAll('.cp-card'));
+    if (!cards.length) return;
+    cards.forEach(function (c, i) { c.setAttribute('data-i', i); });
+
+    function num(c, k) { var v = parseFloat(c.getAttribute(k)); return isNaN(v) ? null : v; }
+    function pillName(p) { return p.textContent.trim(); }
+    function names(c) { // every creator on this card (an offer can have two)
+      return Array.prototype.map.call(c.querySelectorAll('.cp-pill'), pillName).filter(Boolean);
+    }
+
+    /* ---- quote clamp + "more" (one per creator block) ---- */
+    function addToggle(unit, t) {
+      var pill = unit.querySelector('.cp-pill');
+      var name = pill ? pillName(pill) : '';
+      var b = document.createElement('button');
+      b.type = 'button';
+      unit.style.position = 'relative';
+      function state(open) {
+        b.setAttribute('aria-expanded', open ? 'true' : 'false');
+        b.setAttribute('aria-label', (open ? 'Show less of ' : 'Read more of ') + (name ? name + "'s" : 'this') + ' pick');
+        b.textContent = open ? 'less' : 'more';
+        b.style.cssText = open ? OPEN : SHUT;
+        t.style.cssText = open ? '' : CLAMP;
+      }
+      b.addEventListener('click', function () { state(b.getAttribute('aria-expanded') !== 'true'); });
+      state(false);
+      unit.appendChild(b);
+    }
+    // Three passes (write, read, write) so the browser lays out once, not once
+    // per quote. Hidden (filtered-out) cards can't be measured and are skipped;
+    // they are fitted when they are shown again.
+    function fitAll() {
+      var items = [];
+      cards.forEach(function (c) {
+        if (c.style.display === 'none') return;
+        Array.prototype.forEach.call(c.querySelectorAll('.cp-pick'), function (unit) {
+          var t = unit.querySelector('.cp-qtext');
+          if (!t) return;
+          var b = unit.querySelector('button');
+          if (b && b.getAttribute('aria-expanded') === 'true') return;
+          t.style.cssText = CLAMP;
+          items.push({ unit: unit, t: t, b: b });
+        });
+      });
+      var tall = items.map(function (x) { return x.t.scrollHeight > x.t.clientHeight + 1; });
+      items.forEach(function (x, i) {
+        if (!tall[i]) {
+          x.t.style.cssText = '';
+          if (x.b) x.b.style.display = 'none';
+        } else if (!x.b) {
+          addToggle(x.unit, x.t);
+        } else {
+          x.b.style.cssText = SHUT;
+        }
+      });
+    }
+    fitAll();
+    window.addEventListener('load', fitAll);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitAll);
+    var timer;
+    window.addEventListener('resize', function () { clearTimeout(timer); timer = setTimeout(fitAll, 150); });
+
+    if (list.className.indexOf('cp-sort') === -1) return;
+
+    /* ---- creator chips + sort menu ---- */
+    var now = Date.now();
+    function endOf(c) { var e = num(c, 'data-end'); return e !== null && e > now ? e : null; } // past dates don't count
+    var creators = [], faces = {};
+    cards.forEach(function (c) {
+      Array.prototype.forEach.call(c.querySelectorAll('.cp-pill'), function (p) {
+        var n = pillName(p);
+        if (!n || creators.indexOf(n) !== -1) return;
+        creators.push(n);
+        var im = p.querySelector('img');
+        faces[n] = im ? im.getAttribute('src') : '';
+      });
+    });
+    function has(k) { return cards.some(function (c) { var v = num(c, k); return v !== null && v > 0; }); }
+    var modes = [['order', 'Our order']];
+    if (has('data-pub')) modes.push(['new', 'Newest first']);
+    if (has('data-price')) { modes.push(['lo', 'Price: low to high']); modes.push(['hi', 'Price: high to low']); }
+    if (cards.some(function (c) { return endOf(c) !== null; })) modes.push(['end', 'Ending soonest']);
+
+    // The bar goes into the slot the page reserved for it (same minimum height),
+    // so it appears without moving the list.
+    var slot = list.querySelector('.cp-bar-slot');
+    var bar = document.createElement('div');
+    bar.style.cssText = 'padding:8px 0 10px;border-bottom:' + RULE + ';box-sizing:border-box';
+    if (slot) bar.style.minHeight = slot.style.minHeight;
+    var current = '';
+    var chipEls = [];
+    function chipLabel(n) { // first name, unless it is an initial or two creators share it
+      var first = n.split(' ')[0];
+      var clash = creators.some(function (o) { return o !== n && o.split(' ')[0] === first; });
+      return (clash || first.indexOf('.') !== -1) ? n : first;
+    }
+    function chip(parent, label, name, src) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.style.cssText = 'flex:none;display:inline-flex;align-items:center;gap:6px;border-radius:24px;padding:3px 12px 3px ' + (src ? '3px' : '12px') + ';font:500 13px/18px Roboto,sans-serif;cursor:pointer;border:1px solid ' + INK;
+      if (src) {
+        var im = document.createElement('img');
+        im.src = src; im.alt = ''; im.width = 24; im.height = 24;
+        im.style.cssText = 'width:24px;height:24px;border-radius:50%;object-fit:cover';
+        b.appendChild(im);
+      }
+      b.appendChild(document.createTextNode(label));
+      b.addEventListener('click', function () { current = name; apply(); });
+      b._name = name;
+      parent.appendChild(b);
+      chipEls.push(b);
+    }
+    if (creators.length > 1) {
+      var chips = document.createElement('div');
+      chips.setAttribute('role', 'group');
+      chips.setAttribute('aria-label', 'Filter by creator');
+      chips.style.cssText = 'display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none';
+      chip(chips, 'All picks', '', '');
+      creators.forEach(function (n) { chip(chips, chipLabel(n), n, faces[n]); });
+      bar.appendChild(chips);
+    }
+    var line = document.createElement('div');
+    line.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap';
+    var lab = document.createElement('label');
+    lab.style.cssText = 'font:500 13px/18px Roboto,sans-serif;color:#5b6066';
+    lab.appendChild(document.createTextNode('Sort by '));
+    var sel = document.createElement('select');
+    sel.style.cssText = 'font:400 14px/20px Roboto,sans-serif;padding:4px 6px;border:1px solid #868b91;border-radius:4px;background:#fff;color:#303437';
+    modes.forEach(function (m) {
+      var o = document.createElement('option');
+      o.value = m[0]; o.textContent = m[1];
+      sel.appendChild(o);
+    });
+    lab.appendChild(sel);
+    var count = document.createElement('span');
+    count.setAttribute('role', 'status'); // announces the new count after a filter change
+    count.style.cssText = 'font:400 13px/18px Roboto,sans-serif;color:#5b6066';
+    line.appendChild(lab); line.appendChild(count);
+    bar.appendChild(line);
+    if (slot) slot.appendChild(bar); else list.insertBefore(bar, list.firstChild);
+
+    function key(c) { // null = no value, sorted last
+      var m = sel.value, v;
+      if (m === 'new') { v = num(c, 'data-pub'); return v === null ? null : -v; }
+      if (m === 'lo') return num(c, 'data-price');
+      if (m === 'hi') { v = num(c, 'data-price'); return v === null ? null : -v; }
+      if (m === 'end') return endOf(c);
+      return +c.getAttribute('data-i');
+    }
+    function apply() {
+      var shown = 0;
+      var sorted = cards.slice().sort(function (a, b) {
+        var ka = key(a), kb = key(b);
+        if (ka === null && kb === null) return a.getAttribute('data-i') - b.getAttribute('data-i');
+        if (ka === null) return 1;
+        if (kb === null) return -1;
+        return (ka - kb) || (a.getAttribute('data-i') - b.getAttribute('data-i'));
+      });
+      sorted.forEach(function (c) {
+        var ok = !current || names(c).indexOf(current) !== -1; // either creator on a two-creator card
+        c.style.display = ok ? '' : 'none';
+        if (ok) shown++;
+        list.appendChild(c);
+      });
+      chipEls.forEach(function (b) {
+        var on = b._name === current;
+        b.style.background = on ? INK : '#fff';
+        b.style.color = on ? '#fff' : INK;
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      count.textContent = shown + ' of ' + cards.length + ' picks';
+      fitAll(); // cards just shown (or filtered in) have not been measured yet
+    }
+    // Opens on newest first (by when the offer was first published); with no
+    // publish times on any card it stays in the order the cards were written.
+    sel.value = has('data-pub') ? 'new' : 'order';
+    sel.addEventListener('change', apply);
+    apply();
+  });
+}
+const CP_PAGE_SCRIPT = '(' + cpPageScript.toString() + ')();';
+
 function generateHTML() {
   const blogContentId = document.getElementById('blog-content-id').value.trim();
+  if (cardStyle === 'pick') {
+    // Full-width rows, so always the plain vertical container (never the
+    // Bulma multi-column grid), plus the hooks the page script looks for.
+    const cards = offers.map(o => pickCardHTML(o, blogContentId)).join('\n');
+    // The sort bar's slot goes first inside the list, only when the bar is on.
+    return `<div id="custom-offers-list" class="bu-vertical-offers cp-list${cpBar ? ' cp-sort' : ''}">\n${cpBar ? cpBarSlotHTML() : ''}${cards}\n    </div>\n<script>\n${CP_PAGE_SCRIPT}\n</script>`;
+  }
   const cards = offers.map(o => {
     const href    = o.monetizedUrl || o.landingUrl || '';
     const landing = o.landingUrl || href;
@@ -1072,7 +1604,7 @@ function generateHTML() {
 ` : '';
     const descBlock = `              <div class="bu-content bu-is-flex-grow-1">${vs}</div>`;
     const ctaBlock = `              <div class="bu-content bu-ml-0 ${cardStyle === 'compact' ? 'bu-mb-4' : 'bu-mb-0'} bu-is-flex-touch bu-is-justify-content-center">
-                <a class="btn btn-cta bu-m-0" href="${href}" landing_url="${landing}" vendor="${v}" brand="0" category="0" title="${t}"${irefButton}>${o.ctaText || 'Buy Now'}</a>
+                <a class="btn btn-cta bu-m-0" href="${href}" landing_url="${landing}" vendor="${v}" brand="0" category="0" title="${t}"${irefButton}>${ctaTextFor(o)}</a>
               </div>`;
     // Standard: headline, then callout on its own line, description, button.
     // Compact (experimental): callout folds into the headline link as one
@@ -1352,7 +1884,7 @@ function parseAndDisplayCards(html) {
     // <div> (needs to legally hold block content like lists), but older cards
     // may have it as a <p>; .bu-is-flex-grow-1 distinguishes it from the CTA
     // wrapper div, which also carries the plain .bu-content class.
-    const descEl = el.querySelector('.bu-content.bu-is-flex-grow-1') || el.querySelector('.bu-content') || el.querySelector('p');
+    const descEl = el.querySelector('.cp-qtext') || el.querySelector('.bu-content.bu-is-flex-grow-1') || el.querySelector('.bu-content') || el.querySelector('p');
     const links = findCardLinks(el);
     const title = h3 ? cardTitleText(h3) : `Card ${i + 1}`;
     const landingUrl = firstLink ? (firstLink.getAttribute('landing_url') || firstLink.href || '') : '';
@@ -1364,7 +1896,7 @@ function parseAndDisplayCards(html) {
     // Independent of live DatoCMS status — the card's own CTA text is the
     // source of truth for "an editor already decided this stays."
     const keepDespiteExpired = EXPIRED_CTA_PATTERN.test(ctaText);
-    const { missing: irefMissing, mismatched: irefMismatched } = analyzeIrefTags(links.image, links.title, links.button);
+    const { missing: irefMissing, mismatched: irefMismatched } = analyzeIrefTags(links.image, links.title, links.button, links.creators);
     return {
       index: i, title, landingUrl, offerId, ctaText, imageUrl, callout, valueStatement,
       keepDespiteExpired, irefMissing, irefMismatched, status: 'unchecked', flagged: false,
@@ -1405,7 +1937,7 @@ function refreshArticleCardFields() {
     // <div> (needs to legally hold block content like lists), but older cards
     // may have it as a <p>; .bu-is-flex-grow-1 distinguishes it from the CTA
     // wrapper div, which also carries the plain .bu-content class.
-    const descEl = el.querySelector('.bu-content.bu-is-flex-grow-1') || el.querySelector('.bu-content') || el.querySelector('p');
+    const descEl = el.querySelector('.cp-qtext') || el.querySelector('.bu-content.bu-is-flex-grow-1') || el.querySelector('.bu-content') || el.querySelector('p');
     const links = findCardLinks(el);
 
     card.title = h3 ? cardTitleText(h3) : card.title;
@@ -1416,7 +1948,7 @@ function refreshArticleCardFields() {
     card.callout = priceEl ? cardCalloutText(priceEl) : card.callout;
     card.valueStatement = descEl ? descEl.textContent.trim() : card.valueStatement;
     card.keepDespiteExpired = EXPIRED_CTA_PATTERN.test(card.ctaText);
-    const { missing, mismatched } = analyzeIrefTags(links.image, links.title, links.button);
+    const { missing, mismatched } = analyzeIrefTags(links.image, links.title, links.button, links.creators);
     card.irefMissing = missing;
     card.irefMismatched = mismatched;
   });
@@ -1753,13 +2285,16 @@ async function applyIrefFix(i) {
     const typesToFix = Array.from(new Set([...(card.irefMissing || []), ...(card.irefMismatched || [])]));
     const applied = [];
     typesToFix.forEach(type => {
-      const el = linkEls[type];
-      if (!el) return; // the link itself doesn't exist on this card — nothing to tag
-      el.setAttribute('data-iref', irefValue(blogContentId, card.legacyId, type));
-      // Cards generated by a previous version of this tool may still carry
-      // the old, wrong attribute name (see buildDataIref()'s comment) —
-      // clean it up here since we're already touching this exact link.
-      el.removeAttribute('iref-append');
+      // 'creator' is one link per creator; the others are a single link.
+      const els = [].concat(linkEls[type === 'creator' ? 'creators' : type]).filter(Boolean);
+      if (!els.length) return; // the link itself doesn't exist on this card — nothing to tag
+      els.forEach(el => {
+        el.setAttribute('data-iref', irefValue(blogContentId, card.legacyId, type));
+        // Cards generated by a previous version of this tool may still carry
+        // the old, wrong attribute name (see buildDataIref()'s comment) —
+        // clean it up here since we're already touching this exact link.
+        el.removeAttribute('iref-append');
+      });
       applied.push(type);
     });
 
@@ -2847,6 +3382,15 @@ function esc(str) {
     .replace(/"/g, '&quot;');
 }
 
+// For text between tags. Leaves quotation marks alone, which is how a browser
+// re-serializes text, so a card written with this can be found verbatim in the
+// article source by locateCardHTMLSpan() (the Article tab's in-place edits) even
+// when its text contains quotes. Use esc() for attribute values.
+function escText(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 /* ─── Wire up all event listeners ─── */
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -2908,6 +3452,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('layout-vertical-btn').addEventListener('click', () => setCardLayout('vertical'));
   document.getElementById('style-standard-btn').addEventListener('click', () => setCardStyle('standard'));
   document.getElementById('style-compact-btn').addEventListener('click', () => setCardStyle('compact'));
+  document.getElementById('style-pick-btn').addEventListener('click', () => setCardStyle('pick'));
+  document.getElementById('cp-bar-on-btn').addEventListener('click', () => setCpBar(true));
+  document.getElementById('cp-bar-off-btn').addEventListener('click', () => setCpBar(false));
+  document.getElementById('cp-end-on-btn').addEventListener('click', () => setCpEndDates(true));
+  document.getElementById('cp-end-off-btn').addEventListener('click', () => setCpEndDates(false));
   document.getElementById('images-on-btn').addEventListener('click', () => setShowImages(true));
   document.getElementById('images-off-btn').addEventListener('click', () => setShowImages(false));
 
@@ -2919,6 +3468,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btn.dataset.action === 'remove') removeOffer(btn.dataset.id);
     if (btn.dataset.action === 'lock')   toggleLock(btn.dataset.id);
     if (btn.dataset.action === 'edit-desc') toggleDescEditor(btn.dataset.id);
+    if (btn.dataset.action === 'toggle-end') toggleHideEnd(btn.dataset.id);
     if (btn.dataset.action === 'remove-desc-block') removeDescBlock(btn.dataset.id, parseInt(btn.dataset.block, 10));
     if (btn.dataset.action === 'restore-desc') restoreDescription(btn.dataset.id);
   });

@@ -148,7 +148,7 @@
           <span id="offer-count" style="margin-left:auto;font-size:11px;color:var(--text-muted);"></span>
           <button class="danger-text" id="remove-all-btn">Remove All</button>
         </div>
-        <div class="sort-bar">
+        <div class="sort-bar" id="layout-bar">
           <span class="sort-bar-label">Layout</span>
           <button class="sort-btn active" id="layout-grid-btn" title="Multi-column grid (default)">Grid</button>
           <button class="sort-btn" id="layout-vertical-btn" title="Single-column vertical stack">Vertical</button>
@@ -157,6 +157,16 @@
           <span class="sort-bar-label">Style</span>
           <button class="sort-btn active" id="style-standard-btn" title="Headline, callout on its own line, description, button">Standard</button>
           <button class="sort-btn" id="style-compact-btn" title="Experimental: callout folded into the headline as one line, button moved up under it">Compact (experimental)</button>
+          <button class="sort-btn" id="style-pick-btn" title="Creator Pick cards: creator face + name, headline, price, store/shipping, 'Why I picked it' quote. Always one card per row.">Creator Pick</button>
+        </div>
+        <div class="sort-bar" id="pick-options" style="display:none;">
+          <span class="sort-bar-label">Picks</span>
+          <span class="sort-bar-sub">Sort bar</span>
+          <button class="sort-btn active" id="cp-bar-on-btn" title="Add a 'Sort by' menu and creator-face filter above the cards on the published page (a small script)">On</button>
+          <button class="sort-btn" id="cp-bar-off-btn" title="Cards only, no script bar">Off</button>
+          <span class="sort-bar-sub">End dates</span>
+          <button class="sort-btn active" id="cp-end-on-btn" title="Show 'Ends Nov 30' on cards whose offer has an end date (📅 in the table hides it per offer)">On</button>
+          <button class="sort-btn" id="cp-end-off-btn" title="Never show end dates">Off</button>
         </div>
         <div class="sort-bar">
           <span class="sort-bar-label">Images</span>
@@ -174,6 +184,7 @@
               <th>Title</th>
               <th style="width:58px;">Callout</th>
               <th style="width:80px;">CTA text</th>
+              <th style="width:24px;"></th>
               <th style="width:24px;"></th>
               <th style="width:24px;"></th>
               <th style="width:62px;"></th>
