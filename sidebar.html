@@ -159,6 +159,7 @@
           <button class="sort-btn" id="style-classic-btn" title="The original card, kept as a fallback: image column on the left, headline, callout on its own line, description, button.">Classic (original)</button>
           <button class="sort-btn" id="style-compact-btn" title="The promo-code card: callout folded into the headline, button centered under it, then the description. Used with Images Off, as on the AliExpress promo codes page.">Compact (experimental)</button>
           <button class="sort-btn" id="style-pick-btn" title="Creator Pick cards: creator face + name, headline, price, store/shipping, 'Why I picked it' quote. Always one card per row.">Creator Pick</button>
+          <button class="sort-btn" id="style-table-btn" title="One compact row per offer under a header row: headline with the discount, promo code (tap to copy), button. For pages with many similar offers, such as promo codes.">Table</button>
         </div>
         <div class="sort-bar" id="pick-options" style="display:none;">
           <span class="sort-bar-label">Picks</span>
@@ -177,6 +178,11 @@
           <span class="sort-bar-sub">Was price</span>
           <button class="sort-btn active" id="was-on-btn" title="Show the struck-through pre-discount price next to the price, when the offer has one">On</button>
           <button class="sort-btn" id="was-off-btn" title="Never show the struck-through pre-discount price">Off</button>
+          <span id="table-opts" style="display:none;">
+            <span class="sort-bar-sub">Details text</span>
+            <button class="sort-btn active" id="details-on-btn" title="Put each offer's description in an expandable 'Details' under its row (no script; the text stays on the page)">On</button>
+            <button class="sort-btn" id="details-off-btn" title="Leave the descriptions out: the table shows only the headline, code and button">Off</button>
+          </span>
           <span id="trim-opts" style="display:contents;">
             <span class="sort-bar-sub">Trim long descriptions</span>
             <button class="sort-btn active" id="trim-on-btn" title="Show a 'more' link on descriptions longer than about eight lines (a small script on the published page)">On</button>
@@ -211,6 +217,7 @@
               <th>Title</th>
               <th style="width:58px;">Callout</th>
               <th style="width:80px;">CTA text</th>
+              <th id="code-th" style="width:84px; display:none;">Code</th>
               <th style="width:24px;"></th>
               <th style="width:24px;"></th>
               <th style="width:24px;"></th>
