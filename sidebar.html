@@ -155,7 +155,7 @@
         </div>
         <div class="sort-bar">
           <span class="sort-bar-label">Style</span>
-          <button class="sort-btn active" id="style-standard-btn" title="Headline, callout on its own line, description, button">Standard</button>
+          <button class="sort-btn active" id="style-standard-btn" title="Image, headline, price, store/shipping, description, button in one row. No creator, no sort bar.">Standard</button>
           <button class="sort-btn" id="style-compact-btn" title="Experimental: callout folded into the headline as one line, button moved up under it">Compact (experimental)</button>
           <button class="sort-btn" id="style-pick-btn" title="Creator Pick cards: creator face + name, headline, price, store/shipping, 'Why I picked it' quote. Always one card per row.">Creator Pick</button>
         </div>
@@ -164,9 +164,17 @@
           <span class="sort-bar-sub">Sort bar</span>
           <button class="sort-btn active" id="cp-bar-on-btn" title="Add a 'Sort by' menu and creator-face filter above the cards on the published page (a small script)">On</button>
           <button class="sort-btn" id="cp-bar-off-btn" title="Cards only, no script bar">Off</button>
+        </div>
+        <div class="sort-bar" id="details-bar">
+          <span class="sort-bar-label">Details</span>
           <span class="sort-bar-sub">End dates</span>
-          <button class="sort-btn active" id="cp-end-on-btn" title="Show 'Ends Nov 30' on cards whose offer has an end date (📅 in the table hides it per offer)">On</button>
-          <button class="sort-btn" id="cp-end-off-btn" title="Never show end dates">Off</button>
+          <button class="sort-btn active" id="end-on-btn" title="Show 'Ends Nov 30' on cards whose offer has an end date (📅 in the table hides it per offer)">On</button>
+          <button class="sort-btn" id="end-off-btn" title="Never show end dates">Off</button>
+          <span id="trim-opts" style="display:contents;">
+            <span class="sort-bar-sub">Trim long descriptions</span>
+            <button class="sort-btn active" id="trim-on-btn" title="Show a 'more' link on descriptions longer than about eight lines (a small script on the published page)">On</button>
+            <button class="sort-btn" id="trim-off-btn" title="Always show the full description (no script)">Off</button>
+          </span>
         </div>
         <div class="sort-bar">
           <span class="sort-bar-label">Images</span>
