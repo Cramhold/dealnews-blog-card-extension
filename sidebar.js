@@ -816,16 +816,6 @@ function parseCalloutValue(callout) {
   return null;
 }
 
-function setCardLayout(layout) {
-  cardLayout = layout;
-  ['layout-grid-btn', 'layout-vertical-btn'].forEach(id =>
-    document.getElementById(id).classList.remove('active')
-  );
-  document.getElementById('layout-' + layout + '-btn').classList.add('active');
-  renderPreview();
-  renderHTMLOut();
-}
-
 /* ─── Card options ─────────────────────────────────────────────────────────
  * Style, Layout and the On/Off toggles below only change how generateHTML() and
  * renderPreview() render the existing `offers`; nothing about the offers list
@@ -860,7 +850,8 @@ function currentOptions() {
 
 function saveOptions() {
   if (applyingOptions || typeof chrome === 'undefined' || !chrome.storage) return;
-  chrome.storage.sync.set({ [OPTIONS_KEY]: rememberOptions ? { remember: true, ...currentOptions() } : { remember: false } });
+  // A rejected write (storage quota, write-rate limit) only means the choices are not remembered.
+  Promise.resolve(chrome.storage.sync.set({ [OPTIONS_KEY]: rememberOptions ? { remember: true, ...currentOptions() } : { remember: false } })).catch(() => {});
 }
 
 // Applies stored or default choices. Anything missing or of the wrong type falls
@@ -1875,7 +1866,7 @@ function generateHTML() {
     : 'bu-columns bu-is-multiline bu-is-3';
   // Standard cards trim long value statements with the shared "more" script (when
   // Trim is on); Classic and Compact have nothing to trim.
-  const script = (cardStyle === 'standard' && trimLong) ? `\n<script>\n${CARD_MORE_SCRIPT}\n</script>` : '';
+  const script = (cardStyle === 'standard' && trimLong && offers.some(o => o.valueStatement)) ? `\n<script>\n${CARD_MORE_SCRIPT}\n</script>` : '';
   return `<div id="custom-offers-list" class="${containerClass}">\n${cards}\n    </div>${script}`;
 }
 
