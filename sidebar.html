@@ -171,6 +171,12 @@
           <span class="sort-bar-sub">End dates</span>
           <button class="sort-btn active" id="end-on-btn" title="Show 'Ends Nov 30' on cards whose offer has an end date (📅 in the table hides it per offer)">On</button>
           <button class="sort-btn" id="end-off-btn" title="Never show end dates">Off</button>
+          <span class="sort-bar-sub">Store &amp; shipping</span>
+          <button class="sort-btn active" id="meta-on-btn" title="Show the store and shipping text under the price, e.g. 'Amazon · Free shipping' (the end date has its own switch)">On</button>
+          <button class="sort-btn" id="meta-off-btn" title="Leave the store and shipping text out (useful when the description already says it)">Off</button>
+          <span class="sort-bar-sub">Was price</span>
+          <button class="sort-btn active" id="was-on-btn" title="Show the struck-through pre-discount price next to the price, when the offer has one">On</button>
+          <button class="sort-btn" id="was-off-btn" title="Never show the struck-through pre-discount price">Off</button>
           <span id="trim-opts" style="display:contents;">
             <span class="sort-bar-sub">Trim long descriptions</span>
             <button class="sort-btn active" id="trim-on-btn" title="Show a 'more' link on descriptions longer than about eight lines (a small script on the published page)">On</button>
@@ -181,6 +187,18 @@
           <span class="sort-bar-label">Images</span>
           <button class="sort-btn active" id="images-on-btn" title="Include each offer's image">On</button>
           <button class="sort-btn" id="images-off-btn" title="Leave images out of the generated cards (faster loading)">Off</button>
+          <span id="resize-opts" style="display:contents;">
+            <span class="sort-bar-sub">Resize</span>
+            <button class="sort-btn active" id="resize-on-btn" title="Ask the image host for images at twice their display size instead of the full-size upload (Standard and Creator Pick)">On</button>
+            <button class="sort-btn" id="resize-off-btn" title="Use the full-size upload, as the original cards do (turn this off if a resized image looks wrong)">Off</button>
+          </span>
+        </div>
+        <div class="sort-bar">
+          <span class="sort-bar-label">Settings</span>
+          <span class="sort-bar-sub">Remember my choices</span>
+          <button class="sort-btn active" id="remember-on-btn" title="Keep Style, Layout and the On/Off choices when the panel is reopened">On</button>
+          <button class="sort-btn" id="remember-off-btn" title="Start from the defaults every time (stored choices are cleared)">Off</button>
+          <button class="small" id="options-reset-btn" title="Put Style, Layout and every On/Off choice back to the defaults">Reset to defaults</button>
         </div>
       </div>
 

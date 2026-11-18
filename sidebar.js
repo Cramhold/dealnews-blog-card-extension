@@ -32,6 +32,10 @@ let cardStyle  = 'standard'; // 'standard' (row layout) | 'classic' (the origina
 let showImages = true;       // false drops each card's image column entirely — see generateHTML()
 let trimLong   = true;       // Standard style: trim long value statements with a "more" (a small script)
 let cpBar      = true;       // Creator Pick style: emit the sort + creator-filter bar (script) — see "Creator Pick card"
+let showWasPrice = true;       // Standard and Creator Pick styles: the struck-through pre-discount price
+let showMetaLine = true;       // Standard and Creator Pick styles: the "Store · Shipping" line (the end date has its own toggle)
+let resizeImages = true;       // Standard and Creator Pick styles: request images at 2x display size instead of the full upload
+let rememberOptions = true;    // keep the card options between sessions (see "Card options")
 let showEndDates = true;       // Standard and Creator Pick styles: show "Ends Mon D" on cards whose offer has an end date
 let articleOriginalHTML  = '';
 let articleCards         = [];
@@ -822,48 +826,164 @@ function setCardLayout(layout) {
   renderHTMLOut();
 }
 
-// The style, image and Creator Pick option toggles only change how
-// generateHTML()/renderPreview() render the existing `offers` — nothing about
-// the offers list itself is touched, so flipping back and forth never loses
-// setup work.
+/* ─── Card options ─────────────────────────────────────────────────────────
+ * Style, Layout and the On/Off toggles below only change how generateHTML() and
+ * renderPreview() render the existing `offers`; nothing about the offers list
+ * itself is touched, so flipping them back and forth never loses setup work.
+ *
+ * The choices are remembered between sessions (chrome.storage.sync, key
+ * `cardOptions`) unless "Remember my choices" is Off, in which case nothing is
+ * stored and every session starts from the defaults. The offers list, the Blog
+ * Content ID and the per-offer edits (CTA text, hidden end dates, trimmed
+ * descriptions) are never saved: they belong to the article being worked on. */
+const OPTION_DEFAULTS = {
+  style: 'standard', layout: 'grid', images: true, endDates: true, trim: true,
+  bar: true, wasPrice: true, metaLine: true, resize: true,
+};
+const OPTION_STYLES = ['standard', 'classic', 'compact', 'pick'];
+const OPTION_LAYOUTS = ['grid', 'vertical'];
+const OPTIONS_KEY = 'cardOptions';
+let applyingOptions = false; // true while stored choices are being applied, so they are not saved back one by one
+
+// Marks the On/Off pair whose button ids are `${base}-on-btn` and `${base}-off-btn`.
+function markOnOff(base, on) {
+  document.getElementById(`${base}-on-btn`).classList.toggle('active', on);
+  document.getElementById(`${base}-off-btn`).classList.toggle('active', !on);
+}
+
+function currentOptions() {
+  return {
+    style: cardStyle, layout: cardLayout, images: showImages, endDates: showEndDates, trim: trimLong,
+    bar: cpBar, wasPrice: showWasPrice, metaLine: showMetaLine, resize: resizeImages,
+  };
+}
+
+function saveOptions() {
+  if (applyingOptions || typeof chrome === 'undefined' || !chrome.storage) return;
+  chrome.storage.sync.set({ [OPTIONS_KEY]: rememberOptions ? { remember: true, ...currentOptions() } : { remember: false } });
+}
+
+// Applies stored or default choices. Anything missing or of the wrong type falls
+// back to its default, so an older or damaged stored value can't break the panel.
+function applyOptions(stored) {
+  const flag = (key) => typeof stored?.[key] === 'boolean' ? stored[key] : OPTION_DEFAULTS[key];
+  applyingOptions = true;
+  try {
+    setCardLayout(OPTION_LAYOUTS.includes(stored?.layout) ? stored.layout : OPTION_DEFAULTS.layout);
+    setShowImages(flag('images'));
+    setShowEndDates(flag('endDates'));
+    setTrimLong(flag('trim'));
+    setCpBar(flag('bar'));
+    setShowWasPrice(flag('wasPrice'));
+    setShowMetaLine(flag('metaLine'));
+    setResizeImages(flag('resize'));
+    setCardStyle(OPTION_STYLES.includes(stored?.style) ? stored.style : OPTION_DEFAULTS.style); // last: it redraws everything
+  } finally {
+    applyingOptions = false;
+  }
+}
+
+function setRememberOptions(on) {
+  rememberOptions = on;
+  markOnOff('remember', on);
+  saveOptions(); // On: store the current choices now; Off: replace them with { remember: false }
+}
+
+function resetOptions() {
+  applyOptions(OPTION_DEFAULTS);
+  saveOptions();
+}
+
+// Runs once when the panel opens. Choices stored with Remember Off (or none at
+// all) leave the defaults in place.
+function initOptions() {
+  if (typeof chrome === 'undefined' || !chrome.storage) return;
+  chrome.storage.sync.get([OPTIONS_KEY], result => {
+    const stored = result[OPTIONS_KEY];
+    if (stored && stored.remember === false) {
+      rememberOptions = false;
+      markOnOff('remember', false);
+    } else if (stored) {
+      applyOptions(stored);
+    }
+  });
+}
+
+function setCardLayout(layout) {
+  cardLayout = layout;
+  document.getElementById('layout-grid-btn').classList.toggle('active', layout === 'grid');
+  document.getElementById('layout-vertical-btn').classList.toggle('active', layout === 'vertical');
+  renderPreview();
+  renderHTMLOut();
+  saveOptions();
+}
+
 function setCardStyle(style) {
   cardStyle = style;
-  ['standard', 'classic', 'compact', 'pick'].forEach(k =>
+  OPTION_STYLES.forEach(k =>
     document.getElementById('style-' + k + '-btn').classList.toggle('active', k === style)
   );
-  // Creator Pick has its own options (page script bar, end dates) and a
-  // different default button wording, so the table and bar need a redraw too.
+  const rowStyle = style === 'standard' || style === 'pick'; // the row-style cards have the Details and image-resize options
+  // Creator Pick has its own options (page script bar) and a different default
+  // button wording, so the table and bar need a redraw too.
   document.getElementById('pick-options').style.display = style === 'pick' ? 'flex' : 'none';
-  document.getElementById('details-bar').style.display = (style === 'standard' || style === 'pick') ? 'flex' : 'none';
+  document.getElementById('details-bar').style.display = rowStyle ? 'flex' : 'none';
+  document.getElementById('resize-opts').style.display = rowStyle ? 'contents' : 'none';
   document.getElementById('trim-opts').style.display = style === 'standard' ? 'contents' : 'none';
-  // Pick cards are always one per row, so the Grid/Vertical choice doesn't apply.
-  document.getElementById('layout-bar').style.display = style === 'pick' ? 'none' : '';
+  // The row-style cards are always one per row in the plain container, so the
+  // Grid/Vertical choice only applies to Classic and Compact.
+  document.getElementById('layout-bar').style.display = rowStyle ? 'none' : '';
   renderOffers();
   renderPreview();
   renderHTMLOut();
+  saveOptions();
 }
 
 function setTrimLong(on) {
   trimLong = on;
-  document.getElementById('trim-on-btn').classList.toggle('active', on);
-  document.getElementById('trim-off-btn').classList.toggle('active', !on);
+  markOnOff('trim', on);
   renderHTMLOut();
+  saveOptions();
 }
 
 function setCpBar(on) {
   cpBar = on;
-  document.getElementById('cp-bar-on-btn').classList.toggle('active', on);
-  document.getElementById('cp-bar-off-btn').classList.toggle('active', !on);
+  markOnOff('cp-bar', on);
   renderPreview();
   renderHTMLOut();
+  saveOptions();
 }
 
 function setShowEndDates(on) {
   showEndDates = on;
-  document.getElementById('end-on-btn').classList.toggle('active', on);
-  document.getElementById('end-off-btn').classList.toggle('active', !on);
+  markOnOff('end', on);
   renderPreview();
   renderHTMLOut();
+  saveOptions();
+}
+
+function setShowWasPrice(on) {
+  showWasPrice = on;
+  markOnOff('was', on);
+  renderPreview();
+  renderHTMLOut();
+  saveOptions();
+}
+
+function setShowMetaLine(on) {
+  showMetaLine = on;
+  markOnOff('meta', on);
+  renderPreview();
+  renderHTMLOut();
+  saveOptions();
+}
+
+function setResizeImages(on) {
+  resizeImages = on;
+  markOnOff('resize', on);
+  renderPreview();
+  renderHTMLOut();
+  saveOptions();
 }
 
 function toggleHideEnd(id) {
@@ -876,10 +996,10 @@ function toggleHideEnd(id) {
 
 function setShowImages(on) {
   showImages = on;
-  document.getElementById('images-on-btn').classList.toggle('active', on);
-  document.getElementById('images-off-btn').classList.toggle('active', !on);
+  markOnOff('images', on);
   renderPreview();
   renderHTMLOut();
+  saveOptions();
 }
 
 function sortOffers(direction) {
@@ -1264,6 +1384,7 @@ function cpCreatorUrl(name, legacyId) {
 // modern format; the site's own host ignores it.
 function resizedImageUrl(url, displayPx) {
   if (!url) return '';
+  if (!resizeImages) return url; // editor chose the full-size original
   return url + (url.includes('?') ? '&' : '?') + `w=${displayPx * 2}&h=${displayPx * 2}&auto=format`;
 }
 
@@ -1285,9 +1406,13 @@ function hasWasPrice(o) { return o.price > 0 && o.wasPrice > o.price; }
 // An end date is shown (and sortable) only when the editor hasn't hidden it.
 function showsEndDate(o) { return showEndDates && !o.hideEnd && !!o.endISO; }
 
+// "Store · Shipping · Ends Nov 21". The store and shipping part and the end date
+// each have their own toggle.
 function cardMetaLine(o) {
   const ship = o.shipping ? o.shipping.charAt(0).toUpperCase() + o.shipping.slice(1) : '';
-  return [o.vendorName, ship, showsEndDate(o) ? endDateLabel(o.endISO) : ''].filter(Boolean).join(' · ');
+  const parts = showMetaLine ? [o.vendorName, ship] : [];
+  if (showsEndDate(o)) parts.push(endDateLabel(o.endISO));
+  return parts.filter(Boolean).join(' · ');
 }
 
 // Every attribute value below comes from the CMS, so it is escaped with esc()
@@ -1340,7 +1465,7 @@ function rowCardParts(o, blogContentId, imagePx) {
     ? `<a ${link('image')} style="flex: 0 0 ${imagePx}px; height: ${imagePx}px;"><img src="${esc(resizedImageUrl(o.imageUrl, imagePx))}" alt="${title}" width="${imagePx}" height="${imagePx}" decoding="async" style="width: ${imagePx}px; height: ${imagePx}px; object-fit: contain;"></a>`
     : '';
 
-  const was = hasWasPrice(o)
+  const was = (showWasPrice && hasWasPrice(o))
     ? ` <s style="font: 400 14px Roboto, sans-serif; color: ${CARD.was}; margin-left: 4px;"><span style="${SR_ONLY_STYLE}">was </span>${formatMoney(o.wasPrice)}</s>` : '';
   const meta = cardMetaLine(o);
   const metaLine = meta ? `\n                <div style="font-size: 13px; font-weight: 400; line-height: 18px; color: ${CARD.muted};">${escText(meta)}</div>` : '';
@@ -1740,8 +1865,12 @@ function generateHTML() {
   }).join('\n');
   // Grid mode wraps cards in Bulma-style columns for a multi-column layout on the
   // live site; vertical mode omits those classes so each full-width .bu-card just
-  // stacks in normal block flow, one per row.
-  const containerClass = cardLayout === 'vertical'
+  // stacks in normal block flow, one per row. The Standard card is always vertical:
+  // the Bulma container has -10.5px side margins that the old Classic card hid
+  // behind its own padding, but a row card has none, so in Grid mode its content
+  // sat 10.5px closer to both edges than the Creator Pick card's (image 2px from
+  // the edge instead of 12px) and no longer lined up with the page text.
+  const containerClass = (cardStyle === 'standard' || cardLayout === 'vertical')
     ? 'bu-vertical-offers'
     : 'bu-columns bu-is-multiline bu-is-3';
   // Standard cards trim long value statements with the shared "more" script (when
@@ -3532,6 +3661,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initUpdateCheck();
   initBlogIdDetection();
   initDailyCounter();
+  initOptions();
   const selectorInput = document.getElementById('editor-selector');
   chrome.storage.sync.get(['editorSelector'], r => {
     if (r.editorSelector) selectorInput.value = r.editorSelector;
@@ -3578,6 +3708,15 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('cp-bar-off-btn').addEventListener('click', () => setCpBar(false));
   document.getElementById('end-on-btn').addEventListener('click', () => setShowEndDates(true));
   document.getElementById('end-off-btn').addEventListener('click', () => setShowEndDates(false));
+  document.getElementById('was-on-btn').addEventListener('click', () => setShowWasPrice(true));
+  document.getElementById('was-off-btn').addEventListener('click', () => setShowWasPrice(false));
+  document.getElementById('meta-on-btn').addEventListener('click', () => setShowMetaLine(true));
+  document.getElementById('meta-off-btn').addEventListener('click', () => setShowMetaLine(false));
+  document.getElementById('resize-on-btn').addEventListener('click', () => setResizeImages(true));
+  document.getElementById('resize-off-btn').addEventListener('click', () => setResizeImages(false));
+  document.getElementById('remember-on-btn').addEventListener('click', () => setRememberOptions(true));
+  document.getElementById('remember-off-btn').addEventListener('click', () => setRememberOptions(false));
+  document.getElementById('options-reset-btn').addEventListener('click', resetOptions);
   document.getElementById('trim-on-btn').addEventListener('click', () => setTrimLong(true));
   document.getElementById('trim-off-btn').addEventListener('click', () => setTrimLong(false));
   document.getElementById('images-on-btn').addEventListener('click', () => setShowImages(true));
