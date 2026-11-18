@@ -28,7 +28,7 @@ const EXPIRED_GROUP_CTA_TEXT = 'Expired Promo';
 /* ─── State ─── */
 let offers = [];
 let cardLayout = 'grid'; // 'grid' | 'vertical' — see setCardLayout()
-let cardStyle  = 'standard'; // 'standard' | 'compact' (experimental) | 'pick' (Creator Pick) — see generateHTML()
+let cardStyle  = 'standard'; // 'standard' (row layout) | 'classic' (the original card) | 'compact' (experimental) | 'pick' (Creator Pick) — see generateHTML()
 let showImages = true;       // false drops each card's image column entirely — see generateHTML()
 let trimLong   = true;       // Standard style: trim long value statements with a "more" (a small script)
 let cpBar      = true;       // Creator Pick style: emit the sort + creator-filter bar (script) — see "Creator Pick card"
@@ -828,13 +828,13 @@ function setCardLayout(layout) {
 // setup work.
 function setCardStyle(style) {
   cardStyle = style;
-  ['standard', 'compact', 'pick'].forEach(k =>
+  ['standard', 'classic', 'compact', 'pick'].forEach(k =>
     document.getElementById('style-' + k + '-btn').classList.toggle('active', k === style)
   );
   // Creator Pick has its own options (page script bar, end dates) and a
   // different default button wording, so the table and bar need a redraw too.
   document.getElementById('pick-options').style.display = style === 'pick' ? 'flex' : 'none';
-  document.getElementById('details-bar').style.display = style === 'compact' ? 'none' : 'flex';
+  document.getElementById('details-bar').style.display = (style === 'standard' || style === 'pick') ? 'flex' : 'none';
   document.getElementById('trim-opts').style.display = style === 'standard' ? 'contents' : 'none';
   // Pick cards are always one per row, so the Grid/Vertical choice doesn't apply.
   document.getElementById('layout-bar').style.display = style === 'pick' ? 'none' : '';
@@ -981,7 +981,7 @@ function renderOffers() {
             title="${o.locked ? 'Unlock position' : 'Lock position'}">${o.locked ? '🔒' : '🔓'}</button></td>
       <td>${cardStyle === 'pick' ? '' : `<button class="lock-btn ${o.editingDesc || o.valueStatementOriginal !== undefined ? 'locked' : ''}" data-action="edit-desc" data-id="${o.id}"
             title="Edit description — remove parts of it">✂</button>`}</td>
-      <td>${cardStyle !== 'compact' && o.endISO
+      <td>${(cardStyle === 'standard' || cardStyle === 'pick') && o.endISO
         ? `<button class="lock-btn ${o.hideEnd ? 'locked' : ''}" data-action="toggle-end" data-id="${o.id}"
             title="${o.hideEnd ? 'End date hidden on this card — click to show it' : 'Showing the end date (' + esc(endDateLabel(o.endISO)) + ') — click to hide it on this card'}">📅</button>`
         : ''}</td>
@@ -1003,7 +1003,7 @@ function renderPreview() {
     // colors are chosen for the site's white page. The Creator Pick page script
     // doesn't run here, so long quotes show in full and there is no sort bar:
     // both only exist on the published page.
-    if (cardStyle !== 'compact') {
+    if (cardStyle === 'standard' || cardStyle === 'pick') {
       const card = cardStyle === 'pick' ? pickCardHTML(o, '') : standardCardHTML(o, '');
       return `<div class="card-wrap">
       <div class="card-id">${o.id} <button class="danger-text" data-action="remove" data-id="${o.id}">Remove</button></div>
@@ -1183,11 +1183,11 @@ function compactHeadlineParts(title, callout) {
 // .content-call-out span either way so the Article tab can find/strip it.
 function compactHeadlineHTML(title, callout) {
   const p = compactHeadlineParts(title, callout);
-  if (!p.callout) return escText(p.before);
-  const span = txt => `<span class="content-call-out" style="font: inherit; color: inherit;">${escText(txt)}</span>`;
+  if (!p.callout) return p.before;
+  const span = txt => `<span class="content-call-out" style="font: inherit; color: inherit;">${txt}</span>`;
   return p.after
-    ? `${escText(p.before)}${span(` ${p.callout} `)}${escText(p.after)}`
-    : `${escText(p.before)}${span(` ${p.connector} ${p.callout}`)}`;
+    ? `${p.before}${span(` ${p.callout} `)}${p.after}`
+    : `${p.before}${span(` ${p.connector} ${p.callout}`)}`;
 }
 
 function compactHeadlineText(title, callout) {
@@ -1654,44 +1654,71 @@ const CARD_MORE_SCRIPT = '(' + cardMoreScript.toString() + ')();';
 // is built.
 const CARD_PAGE_SCRIPT = CARD_MORE_SCRIPT + '\n(' + cardSortScript.toString() + ')();';
 
-// Compact (experimental): the callout folds into the headline link as one line
-// ("Title for $33") at a fixed size matching dealnews.com's own deal card
-// headlines, and the button moves up into the callout's old slot. The callout
-// span keeps the .content-call-out class so the Article tab can still find it,
-// but resets font/color: that class (and .price) carry large, green,
-// condensed-font styling on the live site. Image-and-text columns use the site's
-// Bulma column classes, unlike the row-style cards above.
-function compactCardHTML(o, blogContentId) {
-  const href    = esc(o.monetizedUrl || o.landingUrl || '');
-  const landing = esc(o.landingUrl || o.monetizedUrl || '');
-  const t       = esc(o.title);
-  const attrs   = type =>
-    `href="${href}" landing_url="${landing}" vendor="${esc(o.vendor || '0')}" brand="0" category="0" title="${t}"${buildDataIref(blogContentId, o.legacyId, type)}`;
-  const img = o.imageUrl
-    ? `<img src="${esc(resizedImageUrl(o.imageUrl, 200))}" alt="${t}" width="200" height="200" decoding="async" style="height: 100%; max-width: 100%; object-fit: contain;">`
-    : '';
-  const imageCol = showImages ? `            <div class="bu-column bu-is-full-tablet bu-is-one-third-desktop bu-is-one-fifth-widescreen bu-is-flex bu-is-justify-content-center" style="height: 200px; width: 200px; margin: auto;">
-              <a ${attrs('image')}>
+// Classic (the original card generator) and Compact (experimental): the markup
+// exactly as it was before the row-style redesign, kept as a selectable fallback
+// in case the new Standard card is not wanted. Image-and-text columns use the
+// site's Bulma column classes. Nothing here is hardened or resized on purpose: it
+// is the original behavior, byte for byte, which is also why the body below keeps
+// its original indentation (the whitespace inside the template strings is part of
+// the generated HTML). `compact` folds the callout into the headline link as one
+// line ("Title for $33") at a fixed size matching dealnews.com's own deal card
+// headlines and moves the button up under it; the callout span keeps the
+// .content-call-out class so the Article tab can still find it, but resets
+// font/color (that class and .price carry large, green, condensed-font styling
+// on the live site).
+function legacyCardHTML(o, blogContentId, compact) {
+    const href    = o.monetizedUrl || o.landingUrl || '';
+    const landing = o.landingUrl || href;
+    const v       = o.vendor || '0';
+    const t       = o.title.replace(/"/g, '&quot;');
+    const img     = o.imageUrl
+      ? `<img src="${o.imageUrl}" alt="${t}" style="height: 100%; max-width: 100%; object-fit: contain;">`
+      : '';
+    // Already-safe HTML from dastNodeToHTML() (lists/links preserved, all
+    // leaf text pre-escaped) — do not escape again here, that would turn the
+    // real <ul>/<a> tags into visible text instead of rendering them.
+    const vs = o.valueStatement || '';
+    const irefImage  = buildDataIref(blogContentId, o.legacyId, 'image');
+    const irefTitle  = buildDataIref(blogContentId, o.legacyId, 'title');
+    const irefButton = buildDataIref(blogContentId, o.legacyId, 'button');
+    const imageCol = showImages ? `            <div class="bu-column bu-is-full-tablet bu-is-one-third-desktop bu-is-one-fifth-widescreen bu-is-flex bu-is-justify-content-center" style="height: 200px; width: 200px; margin: auto;">
+              <a href="${href}" landing_url="${landing}" vendor="${v}" brand="0" category="0" title="${t}"${irefImage}>
                 ${img}
               </a>
             </div>
 ` : '';
-  // valueStatement is already-safe HTML from dastNodeToHTML(): do not escape it.
-  const descBlock = `              <div class="bu-content bu-is-flex-grow-1">${o.valueStatement || ''}</div>`;
-  const ctaBlock = `              <div class="bu-content bu-ml-0 bu-mb-4 bu-is-flex-touch bu-is-justify-content-center">
-                <a class="btn btn-cta bu-m-0" ${attrs('button')}>${escText(ctaTextFor(o))}</a>
+    const descBlock = `              <div class="bu-content bu-is-flex-grow-1">${vs}</div>`;
+    const ctaBlock = `              <div class="bu-content bu-ml-0 ${compact ? 'bu-mb-4' : 'bu-mb-0'} bu-is-flex-touch bu-is-justify-content-center">
+                <a class="btn btn-cta bu-m-0" href="${href}" landing_url="${landing}" vendor="${v}" brand="0" category="0" title="${t}"${irefButton}>${o.ctaText || 'Buy Now'}</a>
               </div>`;
-  return `      <div class="bu-card shadow-depth-0" data-offer-id="${esc(o.id)}">
-        <div class="bu-card-content">
-          <div class="bu-columns">
-${imageCol}            <div class="bu-column bu-is-flex bu-is-flex-direction-column" style="min-width: 150px;">
-              <h3 class="bu-mb-2" style="font-size: 24px; font-weight: 400; line-height: 32px;">
-                <a ${attrs('title')}>
+    // Standard: headline, then callout on its own line, description, button.
+    // Compact (experimental): callout folds into the headline link as one
+    // line ("Title for $33") at a fixed size matching dealnews.com's own deal
+    // card headlines, and the button moves up into the callout's old slot.
+    // The callout span keeps the .content-call-out class so the Article tab
+    // can still find it, but resets font/color — that class (and .price)
+    // carry large, green, condensed-font styling on the live site.
+    const textBlocks = compact
+      ? `              <h3 class="bu-mb-2" style="font-size: 24px; font-weight: 400; line-height: 32px;">
+                <a href="${href}" landing_url="${landing}" vendor="${v}" brand="0" category="0" title="${t}"${irefTitle}>
                   ${compactHeadlineHTML(o.title, o.callout)}
                 </a>
               </h3>
 ${ctaBlock}
+${descBlock}`
+      : `              <h3 class="bu-is-4 bu-mb-2">
+                <a href="${href}" landing_url="${landing}" vendor="${v}" brand="0" category="0" title="${t}"${irefTitle}>
+                  ${o.title}
+                </a>
+              </h3>
+              <span class="price content-call-out bu-is-5 bu-mb-4">${o.callout}</span>
 ${descBlock}
+${ctaBlock}`;
+    return `      <div class="bu-card shadow-depth-0" data-offer-id="${o.id}">
+        <div class="bu-card-content">
+          <div class="bu-columns">
+${imageCol}            <div class="bu-column bu-is-flex bu-is-flex-direction-column" style="min-width: 150px;">
+${textBlocks}
             </div>
           </div>
         </div>
@@ -1707,8 +1734,10 @@ function generateHTML() {
     // The sort bar's slot goes first inside the list, only when the bar is on.
     return `<div id="custom-offers-list" class="bu-vertical-offers cp-list${cpBar ? ' cp-sort' : ''}">\n${cpBar ? cpBarSlotHTML() : ''}${cards}\n    </div>\n<script>\n${CARD_PAGE_SCRIPT}\n</script>`;
   }
-  const build = cardStyle === 'compact' ? compactCardHTML : standardCardHTML;
-  const cards = offers.map(o => build(o, blogContentId)).join('\n');
+  const cards = offers.map(o => {
+    if (cardStyle === 'standard') return standardCardHTML(o, blogContentId);
+    return legacyCardHTML(o, blogContentId, cardStyle === 'compact');
+  }).join('\n');
   // Grid mode wraps cards in Bulma-style columns for a multi-column layout on the
   // live site; vertical mode omits those classes so each full-width .bu-card just
   // stacks in normal block flow, one per row.
@@ -1716,7 +1745,7 @@ function generateHTML() {
     ? 'bu-vertical-offers'
     : 'bu-columns bu-is-multiline bu-is-3';
   // Standard cards trim long value statements with the shared "more" script (when
-  // Trim is on); Compact has nothing to trim.
+  // Trim is on); Classic and Compact have nothing to trim.
   const script = (cardStyle === 'standard' && trimLong) ? `\n<script>\n${CARD_MORE_SCRIPT}\n</script>` : '';
   return `<div id="custom-offers-list" class="${containerClass}">\n${cards}\n    </div>${script}`;
 }
@@ -3542,6 +3571,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('layout-grid-btn').addEventListener('click', () => setCardLayout('grid'));
   document.getElementById('layout-vertical-btn').addEventListener('click', () => setCardLayout('vertical'));
   document.getElementById('style-standard-btn').addEventListener('click', () => setCardStyle('standard'));
+  document.getElementById('style-classic-btn').addEventListener('click', () => setCardStyle('classic'));
   document.getElementById('style-compact-btn').addEventListener('click', () => setCardStyle('compact'));
   document.getElementById('style-pick-btn').addEventListener('click', () => setCardStyle('pick'));
   document.getElementById('cp-bar-on-btn').addEventListener('click', () => setCpBar(true));
