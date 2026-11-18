@@ -848,3 +848,30 @@ tr.row-locked .pos-input { opacity: 0.4; pointer-events: none; }
 .find-meta.soon { color: var(--orange); }
 .find-meta.expired { color: var(--red); }
 .find-added-tag { font-size: 10px; color: var(--success); flex: none; }
+
+/* ─── Creator Pick style (Configure > Edit options, Preview, table badge) ─── */
+.sort-bar-sub { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.cp-nopick {
+  display: inline-block; margin-left: 4px; padding: 0 5px; font-size: 9px; font-weight: 600;
+  color: var(--orange); border: 1px solid var(--orange); border-radius: 8px; white-space: nowrap;
+}
+/* Preview tile: the card's colors are picked for the site's white page, so it
+   keeps a white ground and dark text in the sidebar's dark theme too. */
+.html-preview {
+  background: #fff; color: #303437; border: 1px solid var(--border); border-radius: 6px;
+  padding: 0 10px; font: 300 14px/18px Roboto, Helvetica, Arial, sans-serif;
+}
+.html-preview a { color: #2c65af; text-decoration: none; }
+.html-preview .bu-card:last-child { border-bottom: 0 !important; }
+.html-preview h3 { font-family: Roboto, Helvetica, Arial, sans-serif; }
+.html-preview .btn-cta {
+  display: inline-block; background: #fff; color: #00a863; font: 500 14px/36px Roboto, sans-serif;
+  text-transform: uppercase; padding: 0 12px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+  white-space: nowrap; text-decoration: none;
+}
+
+/* Value statements inside the Standard-card preview: the site's .bu-content styling
+   isn't loaded in the sidebar, so give paragraphs and lists sensible spacing. */
+.html-preview .bu-content p { margin: 0 0 6px; }
+.html-preview .bu-content p:last-child { margin-bottom: 0; }
+.html-preview .bu-content ul, .html-preview .bu-content ol { margin: 4px 0 4px 18px; padding: 0; }
