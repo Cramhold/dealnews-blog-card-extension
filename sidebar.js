@@ -1489,13 +1489,24 @@ function cardLinkBuilder(o, blogContentId) {
   return { title, track, link };
 }
 
+// The site's feature-page CSS gives every paragraph a top margin
+// (`.feature-article p { margin-top: 1em }`, 14px), which pushed a description's
+// first line 14px below the headline's first line beside it, so the two no longer
+// started on the same line. Zero the top margin of the description's first block
+// (a <p> or list; the generated markup never gives it a style attribute of its
+// own). Inline, because the CMS takes only inline styles.
+function flushFirstBlock(html) {
+  return (html || '').replace(/^(\s*<(?:p|ul|ol))(\s[^>]*)?>/i, (m, open, attrs) =>
+    /\bstyle=/i.test(attrs || '') ? m : `${open}${attrs || ''} style="margin-top: 0;">`);
+}
+
 function rowCardParts(o, blogContentId, imagePx) {
   const { title, track, link } = cardLinkBuilder(o, blogContentId);
 
   // Explicit width/height reserve the space before the image loads; contain
   // keeps the whole product visible, centered, whatever its proportions.
   const image = (showImages && o.imageUrl)
-    ? `<a ${link('image')} style="flex: 0 0 ${imagePx}px; height: ${imagePx}px;"><img src="${esc(resizedImageUrl(o.imageUrl, imagePx))}" alt="${title}" width="${imagePx}" height="${imagePx}" decoding="async" style="width: ${imagePx}px; height: ${imagePx}px; object-fit: contain;"></a>`
+    ? `<a ${link('image')} style="flex: 0 0 ${imagePx}px; height: ${imagePx}px;"><img src="${esc(resizedImageUrl(o.imageUrl, imagePx))}" alt="${title}" width="${imagePx}" height="${imagePx}" decoding="async" style="width: ${imagePx}px; height: ${imagePx}px; object-fit: contain; object-position: left top;"></a>`
     : '';
 
   const was = (showWasPrice && hasWasPrice(o))
@@ -1539,7 +1550,7 @@ function rowCardShell(parts, middle, attrs, extraClass) {
 function standardCardHTML(o, blogContentId) {
   const parts = rowCardParts(o, blogContentId, CARD.standardImage);
   const middle = o.valueStatement
-    ? `\n            <div class="dn-more" style="flex: 2 1 320px; min-width: 0;"><div class="dn-text bu-content bu-is-flex-grow-1" style="margin: 0; font-size: 14px; font-weight: 400; line-height: 20px;">${o.valueStatement}</div></div>`
+    ? `\n            <div class="dn-more" style="flex: 2 1 320px; min-width: 0;"><div class="dn-text bu-content bu-is-flex-grow-1" style="margin: 0; font-size: 14px; font-weight: 400; line-height: 20px;">${flushFirstBlock(o.valueStatement)}</div></div>`
     : '';
   return rowCardShell(parts, middle, `data-offer-id="${esc(o.id)}"`, '');
 }
@@ -1661,11 +1672,11 @@ function tableRowHTML(o, blogContentId, ctx) {
   const metaHTML = [was, metaText ? escText(metaText) : ''].filter(Boolean).join(' · ');
   const metaStyle = `font: 400 13px/18px Roboto, sans-serif; color: ${CARD.muted};`;
   const below = (showDetails && o.valueStatement)
-    ? `\n              <details class="tb-details" style="margin-top: 2px;"><summary style="${metaStyle} display: block; list-style: none; cursor: pointer;">${metaHTML ? metaHTML + ' · ' : ''}<span style="font-weight: 500; color: #2c65af;">Details<span aria-hidden="true"> ▾</span></span></summary><div class="bu-content bu-is-flex-grow-1" style="margin: 6px 0 0; font-size: 14px; font-weight: 400; line-height: 20px;">${o.valueStatement}</div></details>`
+    ? `\n              <details class="tb-details" style="margin-top: 2px;"><summary style="${metaStyle} display: block; list-style: none; cursor: pointer;">${metaHTML ? metaHTML + ' · ' : ''}<span style="font-weight: 500; color: #2c65af;">Details<span aria-hidden="true"> ▾</span></span></summary><div class="bu-content bu-is-flex-grow-1" style="margin: 6px 0 0; font-size: 14px; font-weight: 400; line-height: 20px;">${flushFirstBlock(o.valueStatement)}</div></details>`
     : metaHTML ? `\n              <div style="${metaStyle} margin-top: 2px;">${metaHTML}</div>` : '';
 
   const thumb = (ctx.hasImages && o.imageUrl)
-    ? `<a ${link('image')} style="flex: 0 0 ${TB.thumb}px; height: ${TB.thumb}px;"><img src="${esc(resizedImageUrl(o.imageUrl, TB.thumb))}" alt="${title}" width="${TB.thumb}" height="${TB.thumb}" decoding="async" style="width: ${TB.thumb}px; height: ${TB.thumb}px; object-fit: contain;"></a>`
+    ? `<a ${link('image')} style="flex: 0 0 ${TB.thumb}px; height: ${TB.thumb}px;"><img src="${esc(resizedImageUrl(o.imageUrl, TB.thumb))}" alt="${title}" width="${TB.thumb}" height="${TB.thumb}" decoding="async" style="width: ${TB.thumb}px; height: ${TB.thumb}px; object-fit: contain; object-position: left top;"></a>`
     : (ctx.hasImages ? `<div style="flex: 0 0 ${TB.thumb}px;"></div>` : '');
 
   const code = offerCode(o);
