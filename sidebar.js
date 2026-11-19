@@ -28,7 +28,7 @@ const EXPIRED_GROUP_CTA_TEXT = 'Expired Promo';
 /* ─── State ─── */
 let offers = [];
 let cardLayout = 'grid'; // 'grid' | 'vertical' — see setCardLayout()
-let cardStyle  = 'standard'; // 'standard' (row layout) | 'classic' (the original card) | 'compact' (experimental) | 'pick' (Creator Pick) — see generateHTML()
+let cardStyle  = 'standard'; // 'standard' (row layout) | 'classic' (the original card) | 'compact' (experimental) | 'pick' (Creator Pick) | 'table' — see generateHTML()
 let showImages = true;       // false drops each card's image column entirely — see generateHTML()
 let trimLong   = true;       // Standard style: trim long value statements with a "more" (a small script)
 let cpBar      = true;       // Creator Pick style: emit the sort + creator-filter bar (script) — see "Creator Pick card"
@@ -36,6 +36,7 @@ let showWasPrice = true;       // Standard and Creator Pick styles: the struck-t
 let showMetaLine = true;       // Standard and Creator Pick styles: the "Store · Shipping" line (the end date has its own toggle)
 let resizeImages = true;       // Standard and Creator Pick styles: request images at 2x display size instead of the full upload
 let rememberOptions = true;    // keep the card options between sessions (see "Card options")
+let showDetails = true;        // Table style: each row's description in an expandable "Details" (off = the table has no description text)
 let showEndDates = true;       // Standard and Creator Pick styles: show "Ends Mon D" on cards whose offer has an end date
 let articleOriginalHTML  = '';
 let articleCards         = [];
@@ -722,6 +723,21 @@ function updateCTA(id, value) {
   if (offer) offer.ctaText = value;
 }
 
+// Table style: the promo code shown for an offer. Typing in the Code box overrides
+// the one found in the description; clearing the box means "no code" (not "look
+// again"), so a wrong guess can be removed.
+function updateCode(id, value) {
+  const offer = offers.find(o => o.id === id);
+  if (!offer) return;
+  offer.code = value.trim();
+  // The button's default text depends on whether there is a code, so keep the
+  // CTA box in step (unless the editor typed their own CTA text).
+  if (!offer.ctaText) {
+    const box = Array.from(document.querySelectorAll('.cta-input:not(.code-input)')).find(b => b.dataset.id === id);
+    if (box) box.value = ctaTextFor(offer);
+  }
+}
+
 // Description editing — the offer's description is trusted HTML from
 // dastNodeToHTML() (see "Offer description formatting" in CLAUDE.md), so it's
 // edited by dropping whole top-level blocks (<p>, <ul>, ...) out of it
@@ -776,7 +792,7 @@ function descEditorRowHTML(o) {
   const restore = o.valueStatementOriginal !== undefined
     ? `<button class="small" data-action="restore-desc" data-id="${esc(o.id)}">↺ Restore original</button>`
     : '';
-  return `<tr class="desc-row"><td colspan="9">${rows}${restore}</td></tr>`;
+  return `<tr class="desc-row"><td colspan="${cardStyle === 'table' ? 10 : 9}">${rows}${restore}</td></tr>`;
 }
 
 function moveOffer(id, rawVal) {
@@ -828,9 +844,9 @@ function parseCalloutValue(callout) {
  * descriptions) are never saved: they belong to the article being worked on. */
 const OPTION_DEFAULTS = {
   style: 'standard', layout: 'grid', images: true, endDates: true, trim: true,
-  bar: true, wasPrice: true, metaLine: true, resize: true,
+  bar: true, wasPrice: true, metaLine: true, resize: true, details: true,
 };
-const OPTION_STYLES = ['standard', 'classic', 'compact', 'pick'];
+const OPTION_STYLES = ['standard', 'classic', 'compact', 'pick', 'table'];
 const OPTION_LAYOUTS = ['grid', 'vertical'];
 const OPTIONS_KEY = 'cardOptions';
 let applyingOptions = false; // true while stored choices are being applied, so they are not saved back one by one
@@ -844,7 +860,7 @@ function markOnOff(base, on) {
 function currentOptions() {
   return {
     style: cardStyle, layout: cardLayout, images: showImages, endDates: showEndDates, trim: trimLong,
-    bar: cpBar, wasPrice: showWasPrice, metaLine: showMetaLine, resize: resizeImages,
+    bar: cpBar, wasPrice: showWasPrice, metaLine: showMetaLine, resize: resizeImages, details: showDetails,
   };
 }
 
@@ -868,6 +884,7 @@ function applyOptions(stored) {
     setShowWasPrice(flag('wasPrice'));
     setShowMetaLine(flag('metaLine'));
     setResizeImages(flag('resize'));
+    setShowDetails(flag('details'));
     setCardStyle(OPTION_STYLES.includes(stored?.style) ? stored.style : OPTION_DEFAULTS.style); // last: it redraws everything
   } finally {
     applyingOptions = false;
@@ -914,17 +931,26 @@ function setCardStyle(style) {
   OPTION_STYLES.forEach(k =>
     document.getElementById('style-' + k + '-btn').classList.toggle('active', k === style)
   );
-  const rowStyle = style === 'standard' || style === 'pick'; // the row-style cards have the Details and image-resize options
+  const rowStyle = style === 'standard' || style === 'pick' || style === 'table'; // the row-style cards have the Details and image-resize options
   // Creator Pick has its own options (page script bar) and a different default
   // button wording, so the table and bar need a redraw too.
   document.getElementById('pick-options').style.display = style === 'pick' ? 'flex' : 'none';
   document.getElementById('details-bar').style.display = rowStyle ? 'flex' : 'none';
   document.getElementById('resize-opts').style.display = rowStyle ? 'contents' : 'none';
   document.getElementById('trim-opts').style.display = style === 'standard' ? 'contents' : 'none';
+  document.getElementById('table-opts').style.display = style === 'table' ? 'contents' : 'none';
   // The row-style cards are always one per row in the plain container, so the
   // Grid/Vertical choice only applies to Classic and Compact.
   document.getElementById('layout-bar').style.display = rowStyle ? 'none' : '';
   renderOffers();
+  renderPreview();
+  renderHTMLOut();
+  saveOptions();
+}
+
+function setShowDetails(on) {
+  showDetails = on;
+  markOnOff('details', on);
   renderPreview();
   renderHTMLOut();
   saveOptions();
@@ -1078,6 +1104,7 @@ function renderOffers() {
   empty.style.display = 'none';
   if (countEl) countEl.textContent = `${offers.length} offer${offers.length !== 1 ? 's' : ''}`;
 
+  document.getElementById('code-th').style.display = cardStyle === 'table' ? '' : 'none';
   tbody.innerHTML = offers.map((o, i) => `
     <tr draggable="${!o.locked}" data-index="${i}" class="${o.locked ? 'row-locked' : ''}">
       <td><span class="drag-handle" title="${o.locked ? 'Unlock to reorder' : 'Drag to reorder'}">⠿</span></td>
@@ -1088,11 +1115,12 @@ function renderOffers() {
       <td class="cell-trunc">${esc(o.title)}${cardStyle === 'pick' ? pickBadgeHTML(o) : ''}</td>
       <td class="cell-muted" style="font-size:11px;">${esc(o.callout)}</td>
       <td><input class="cta-input" value="${esc(ctaTextFor(o))}" data-id="${o.id}" /></td>
+      ${cardStyle === 'table' ? `<td><input class="cta-input code-input" value="${esc(offerCode(o))}" placeholder="no code" data-id="${o.id}" title="Promo code shown in the Code column (found in the description; edit or clear it here)" /></td>` : ''}
       <td><button class="lock-btn ${o.locked ? 'locked' : ''}" data-action="lock" data-id="${o.id}"
             title="${o.locked ? 'Unlock position' : 'Lock position'}">${o.locked ? '🔒' : '🔓'}</button></td>
       <td>${cardStyle === 'pick' ? '' : `<button class="lock-btn ${o.editingDesc || o.valueStatementOriginal !== undefined ? 'locked' : ''}" data-action="edit-desc" data-id="${o.id}"
             title="Edit description — remove parts of it">✂</button>`}</td>
-      <td>${(cardStyle === 'standard' || cardStyle === 'pick') && o.endISO
+      <td>${(cardStyle === 'standard' || cardStyle === 'pick' || cardStyle === 'table') && o.endISO
         ? `<button class="lock-btn ${o.hideEnd ? 'locked' : ''}" data-action="toggle-end" data-id="${o.id}"
             title="${o.hideEnd ? 'End date hidden on this card — click to show it' : 'Showing the end date (' + esc(endDateLabel(o.endISO)) + ') — click to hide it on this card'}">📅</button>`
         : ''}</td>
@@ -1107,6 +1135,13 @@ function renderPreview() {
   const empty = document.getElementById('preview-empty');
   if (!offers.length) { container.innerHTML = ''; empty.style.display = 'block'; return; }
   empty.style.display = 'none';
+
+  // Table: the whole generated table (header row included) on one white tile.
+  if (cardStyle === 'table') {
+    container.innerHTML = `<div class="card-wrap"><div class="card-id">${offers.length} row${offers.length !== 1 ? 's' : ''} <span class="cell-muted">(the Code chip copies on the published page)</span></div><div class="html-preview">${tableHTML('')}</div></div>`;
+    container.querySelectorAll('.html-preview a').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
+    return;
+  }
 
   container.innerHTML = offers.map(o => {
     // Standard and Creator Pick: show the real generated card (same markup the
@@ -1352,6 +1387,7 @@ const SR_ONLY_STYLE = 'position: absolute; width: 1px; height: 1px; overflow: hi
 // their own text in the table.
 function ctaTextFor(o, style = cardStyle) {
   if (o.ctaText) return o.ctaText;
+  if (style === 'table' && offerCode(o)) return 'Use Promo Code';
   if ((style === 'pick' || style === 'standard') && o.price !== undefined && !(o.price > 0)) return 'Shop Now';
   return 'Buy Now';
 }
@@ -1439,21 +1475,38 @@ function cpQuoteHTML(picks, tracking) {
 
 // Pieces every row-style card (Standard and Creator Pick) shares: the image, the
 // headline / price / store column, and the button. imagePx is the image box size.
-function rowCardParts(o, blogContentId, imagePx) {
+// The monetized links (image, title, button) share every attribute except the
+// tracking value; `link(type)` builds one, `track(type)` is just the data-iref
+// attribute (the Creator Pick creator link goes to the creator's page and has its
+// own attributes). `title` is the escaped title.
+function cardLinkBuilder(o, blogContentId) {
   const href    = esc(o.monetizedUrl || o.landingUrl || '');
   const landing = esc(o.landingUrl || o.monetizedUrl || '');
   const title   = esc(o.title);
-  // The monetized links (image, title, button) share every attribute except the
-  // tracking value; the creator link (Creator Pick only) goes to the creator's
-  // page and has its own.
   const track = type => buildDataIref(blogContentId, o.legacyId, type);
   const link = type =>
     `href="${href}" landing_url="${landing}" vendor="${esc(o.vendor || '0')}" brand="0" category="0" title="${title}"${track(type)}`;
+  return { title, track, link };
+}
+
+// The site's feature-page CSS gives every paragraph a top margin
+// (`.feature-article p { margin-top: 1em }`, 14px), which pushed a description's
+// first line 14px below the headline's first line beside it, so the two no longer
+// started on the same line. Zero the top margin of the description's first block
+// (a <p> or list; the generated markup never gives it a style attribute of its
+// own). Inline, because the CMS takes only inline styles.
+function flushFirstBlock(html) {
+  return (html || '').replace(/^(\s*<(?:p|ul|ol))(\s[^>]*)?>/i, (m, open, attrs) =>
+    /\bstyle=/i.test(attrs || '') ? m : `${open}${attrs || ''} style="margin-top: 0;">`);
+}
+
+function rowCardParts(o, blogContentId, imagePx) {
+  const { title, track, link } = cardLinkBuilder(o, blogContentId);
 
   // Explicit width/height reserve the space before the image loads; contain
   // keeps the whole product visible, centered, whatever its proportions.
   const image = (showImages && o.imageUrl)
-    ? `<a ${link('image')} style="flex: 0 0 ${imagePx}px; height: ${imagePx}px;"><img src="${esc(resizedImageUrl(o.imageUrl, imagePx))}" alt="${title}" width="${imagePx}" height="${imagePx}" decoding="async" style="width: ${imagePx}px; height: ${imagePx}px; object-fit: contain;"></a>`
+    ? `<a ${link('image')} style="flex: 0 0 ${imagePx}px; height: ${imagePx}px;"><img src="${esc(resizedImageUrl(o.imageUrl, imagePx))}" alt="${title}" width="${imagePx}" height="${imagePx}" decoding="async" style="width: ${imagePx}px; height: ${imagePx}px; object-fit: contain; object-position: left top;"></a>`
     : '';
 
   const was = (showWasPrice && hasWasPrice(o))
@@ -1497,7 +1550,7 @@ function rowCardShell(parts, middle, attrs, extraClass) {
 function standardCardHTML(o, blogContentId) {
   const parts = rowCardParts(o, blogContentId, CARD.standardImage);
   const middle = o.valueStatement
-    ? `\n            <div class="dn-more" style="flex: 2 1 320px; min-width: 0;"><div class="dn-text bu-content bu-is-flex-grow-1" style="margin: 0; font-size: 14px; font-weight: 400; line-height: 20px;">${o.valueStatement}</div></div>`
+    ? `\n            <div class="dn-more" style="flex: 2 1 320px; min-width: 0;"><div class="dn-text bu-content bu-is-flex-grow-1" style="margin: 0; font-size: 14px; font-weight: 400; line-height: 20px;">${flushFirstBlock(o.valueStatement)}</div></div>`
     : '';
   return rowCardShell(parts, middle, `data-offer-id="${esc(o.id)}"`, '');
 }
@@ -1527,6 +1580,142 @@ function cpBarSlotHTML() {
   offers.forEach(o => (o.picks || []).forEach(p => { if (p.authorName) creators.add(p.authorName); }));
   const h = creators.size > 1 ? CP_BAR_HEIGHT.chips : CP_BAR_HEIGHT.plain;
   return `      <div class="cp-bar-slot" style="min-height: ${h}px;"></div>\n`;
+}
+
+/* ─── Table style ──────────────────────────────────────────────────────────
+ * One row per offer under a column-header row, built for pages that list many
+ * near-identical offers (the AliExpress promo codes page: 26 tiered codes that took
+ * ~16,000px as cards). Like the row-style cards it is a wrapping flex row with NO
+ * media queries (inline styles only): wide, a row is one line, `Offer | Code |
+ * button`, with the Code and button columns at fixed widths so they line up down the
+ * page; on a phone the offer text takes the first line and the Code and button wrap
+ * together onto the second. The header row uses the same widths, and is clipped to
+ * one line, so it lines up above the columns when they are side by side and shows
+ * only "Offer" when they wrap.
+ *
+ * Each row is still a .bu-card with data-offer-id, an h3 title link, a
+ * .content-call-out span (the discount is folded into the headline, as in Compact),
+ * a .btn-cta button and, in the optional expandable Details, a .bu-content
+ * .bu-is-flex-grow-1 block, so the Article tab (expirations, flags, reorder, iref
+ * audit and fix) treats a row like any other card. The one page script copies a
+ * promo code when its chip is tapped; without it the chip is plain, selectable
+ * text. */
+const TB = { thumb: 56, code: 128, button: 148, main: 240, gap: 16 };
+
+// A promo code the description names, quoted ("DBDEAL3") or after the word code
+// (code SAVE20): 4-25 capitals, digits, - or _, with at least one letter so a
+// quoted year can't match. Case matters on purpose, so ordinary quoted words don't.
+const PROMO_CODE_QUOTED = /["“‘']((?=[A-Z0-9_-]*[A-Z])[A-Z0-9][A-Z0-9_-]{3,24})["”’']/g;
+// After the word code the token must also contain a digit, so "Promo Code FREE
+// shipping" and "Code TERMS apply" don't match; "code: SAVE20" does.
+const PROMO_CODE_AFTER_WORD = /\b(?:[Cc]ode|CODE):?\s+((?=[A-Z0-9_-]*[A-Z])(?=[A-Z_-]*[0-9])[A-Z0-9][A-Z0-9_-]{3,24})\b/;
+const BLOCK_END_PATTERN = /<\/(?:p|li|div|h[1-6])>/gi;
+
+function detectPromoCode(o) {
+  if (!o.valueStatement) return '';
+  const tpl = document.createElement('template');
+  tpl.innerHTML = o.valueStatement.replace(BLOCK_END_PATTERN, ' ');
+  const text = tpl.content.textContent || '';
+  // A quoted token counts when it has a digit (DBDEAL3) or the word "code" sits
+  // just before it; a quoted all-letter word elsewhere ("the "SALE" tab") does not.
+  const quoted = new RegExp(PROMO_CODE_QUOTED.source, 'g');
+  let m;
+  while ((m = quoted.exec(text))) {
+    if (/\d/.test(m[1]) || /code/i.test(text.slice(Math.max(0, m.index - 40), m.index))) return m[1];
+  }
+  const w = PROMO_CODE_AFTER_WORD.exec(text);
+  return w ? w[1] : '';
+}
+
+// An edited code (updateCode) wins over the detected one; '' means none.
+function offerCode(o) { return o.code !== undefined ? o.code : detectPromoCode(o); }
+
+// The header row. Same column widths as the rows (so it wraps at the same width),
+// clipped to one line: the inner box is one 16px line tall with overflow hidden, so
+// when the columns wrap only the first label shows.
+function tableHeaderHTML(ctx) {
+  const labelStyle = `font: 700 11px/16px Roboto, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: ${CARD.muted};`;
+  const offerPad = ctx.hasImages ? ` padding-left: ${TB.thumb + 12}px;` : '';
+  const actW = ctx.hasCodes ? TB.code + TB.gap + TB.button : TB.button;
+  const codeHead = ctx.hasCodes ? `<div role="columnheader" style="flex: 0 0 ${TB.code}px;">Code</div>` : '';
+  return `      <div role="row" style="border-bottom: 2px solid ${CARD.rule}; padding-bottom: 6px;">
+        <div style="display: flex; flex-wrap: wrap; gap: 0 ${TB.gap}px; max-height: 16px; overflow: hidden; ${labelStyle}">
+          <div role="columnheader" style="flex: 3 1 ${TB.main}px; min-width: 0; box-sizing: border-box;${offerPad}">Offer</div>
+          <div style="flex: 1 0 ${actW}px; display: flex; justify-content: ${ctx.hasCodes ? 'space-between' : 'flex-end'}; gap: ${TB.gap}px;">
+            ${codeHead}
+            <div role="columnheader" style="flex: 0 0 ${TB.button}px;"><span style="${SR_ONLY_STYLE}">Link</span></div>
+          </div>
+        </div>
+      </div>`;
+}
+
+// One row. ctx = { hasCodes, hasImages } for the whole table, so every row has the
+// same cells even when only some offers carry a code.
+function tableRowHTML(o, blogContentId, ctx) {
+  const { title, link } = cardLinkBuilder(o, blogContentId);
+
+  // Headline with the discount folded in ("AliExpress $3 off $15 Promo Code"),
+  // the discount in bold. The span keeps .content-call-out for the Article tab.
+  const hp = compactHeadlineParts(o.title, o.callout);
+  const span = txt => `<span class="content-call-out" style="font: inherit; font-weight: 700; color: inherit;">${escText(txt)}</span>`;
+  const headline = !hp.callout ? escText(hp.before)
+    : hp.after ? `${escText(hp.before)}${span(` ${hp.callout} `)}${escText(hp.after)}`
+    : `${escText(hp.before)}${span(` ${hp.connector} ${hp.callout}`)}`;
+
+  const was = (showWasPrice && hasWasPrice(o))
+    ? `<s style="color: ${CARD.was};"><span style="${SR_ONLY_STYLE}">was </span>${formatMoney(o.wasPrice)}</s>` : '';
+  // One line under the headline: "was price · store · shipping · end date", and,
+  // when the description is on, a "Details" toggle at its end (a native <details>:
+  // no script, and the text stays on the page). The summary is display: block
+  // with no list style, so the browser draws no triangle of its own.
+  const metaText = cardMetaLine(o);
+  const metaHTML = [was, metaText ? escText(metaText) : ''].filter(Boolean).join(' · ');
+  const metaStyle = `font: 400 13px/18px Roboto, sans-serif; color: ${CARD.muted};`;
+  const below = (showDetails && o.valueStatement)
+    ? `\n              <details class="tb-details" style="margin-top: 2px;"><summary style="${metaStyle} display: block; list-style: none; cursor: pointer;">${metaHTML ? metaHTML + ' · ' : ''}<span style="font-weight: 500; color: #2c65af;">Details<span aria-hidden="true"> ▾</span></span></summary><div class="bu-content bu-is-flex-grow-1" style="margin: 6px 0 0; font-size: 14px; font-weight: 400; line-height: 20px;">${flushFirstBlock(o.valueStatement)}</div></details>`
+    : metaHTML ? `\n              <div style="${metaStyle} margin-top: 2px;">${metaHTML}</div>` : '';
+
+  const thumb = (ctx.hasImages && o.imageUrl)
+    ? `<a ${link('image')} style="flex: 0 0 ${TB.thumb}px; height: ${TB.thumb}px;"><img src="${esc(resizedImageUrl(o.imageUrl, TB.thumb))}" alt="${title}" width="${TB.thumb}" height="${TB.thumb}" decoding="async" style="width: ${TB.thumb}px; height: ${TB.thumb}px; object-fit: contain; object-position: left top;"></a>`
+    : (ctx.hasImages ? `<div style="flex: 0 0 ${TB.thumb}px;"></div>` : '');
+
+  const code = offerCode(o);
+  const codeCell = !ctx.hasCodes ? '' : code
+    ? `<div role="cell" style="flex: 0 0 ${TB.code}px; min-width: 0;"><span class="tb-code" data-code="${esc(code)}" style="display: inline-block; max-width: 100%; box-sizing: border-box; padding: 5px 10px; border: 1.5px dashed #868b91; border-radius: 6px; background: #f6f8fa; font: 700 15px/20px 'Roboto Mono', Consolas, Menlo, monospace; letter-spacing: .04em; color: #303437; overflow-wrap: anywhere; user-select: all;">${escText(code)}</span><span class="tb-cap" style="display: block; min-height: 14px; margin-top: 3px; font: 500 11px/14px Roboto, sans-serif; color: #2c65af;"></span></div>`
+    : `<div role="cell" style="flex: 0 0 ${TB.code}px;"></div>`;
+
+  const ctaText = ctaTextFor(o);
+  const button = `<a class="btn btn-cta bu-m-0" ${link('button')} aria-label="${esc(ctaText)}: ${title}" style="display: block; width: 100%; box-sizing: border-box; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escText(ctaText)}</a>`;
+  const actW = ctx.hasCodes ? TB.code + TB.gap + TB.button : TB.button;
+
+  return `      <div class="bu-card shadow-depth-0" role="row" data-offer-id="${esc(o.id)}" style="border-bottom: 1px solid ${CARD.rule}; border-radius: 0;">
+        <div class="bu-card-content" style="padding: 12px 0;">
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px ${TB.gap}px;">
+            <div role="cell" style="flex: 3 1 ${TB.main}px; min-width: 0; display: flex; gap: 12px; align-items: flex-start;">
+              ${thumb}
+              <div style="flex: 1 1 0; min-width: 0;">
+              <h3 style="font-size: 16px; line-height: 22px; font-weight: 500; margin: 0;">
+                <a ${link('title')}>${headline}</a>
+              </h3>${below}
+              </div>
+            </div>
+            <div style="flex: 1 0 ${actW}px; display: flex; align-items: center; justify-content: ${ctx.hasCodes ? 'space-between' : 'flex-end'}; gap: ${TB.gap}px;">
+              ${codeCell}
+              <div role="cell" style="flex: 0 0 ${TB.button}px; min-width: 0;">${button}</div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+}
+
+function tableHTML(blogContentId) {
+  const ctx = {
+    hasCodes: offers.some(o => offerCode(o)),
+    hasImages: showImages && offers.some(o => o.imageUrl),
+  };
+  const rows = offers.map(o => tableRowHTML(o, blogContentId, ctx)).join('\n');
+  const script = ctx.hasCodes ? `\n<script>\n${TABLE_SCRIPT}\n</script>` : '';
+  return `<div id="custom-offers-list" class="bu-vertical-offers tb-list" role="table">\n${tableHeaderHTML(ctx)}\n${rows}\n    </div>${script}`;
 }
 
 // The page scripts. They are real functions so they are syntax-highlighted,
@@ -1770,6 +1959,60 @@ const CARD_MORE_SCRIPT = '(' + cardMoreScript.toString() + ')();';
 // is built.
 const CARD_PAGE_SCRIPT = CARD_MORE_SCRIPT + '\n(' + cardSortScript.toString() + ')();';
 
+// Table style only: tapping a promo-code chip copies the code. Progressive
+// enhancement: the chip is plain selectable text until this runs, and the caption
+// line under it is reserved in the HTML so adding the "Tap to copy" text moves
+// nothing.
+function tableCopyScript() {
+  Array.prototype.forEach.call(document.querySelectorAll('.tb-code'), function (chip) {
+    if (chip.tbReady) return;
+    chip.tbReady = true;
+    var code = chip.getAttribute('data-code') || chip.textContent;
+    var cap = chip.parentNode.querySelector('.tb-cap');
+    var timer;
+    // The caption is not a live region until a copy happens (26 of them
+    // announcing "Tap to copy" at load would be noise); the role is added just
+    // before the message so it is announced, and removed when it resets.
+    function say(msg) {
+      if (!cap) return;
+      cap.setAttribute('role', 'status');
+      setTimeout(function () { cap.textContent = msg; }, 60);
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        cap.removeAttribute('role');
+        cap.textContent = 'Tap to copy';
+      }, 2400);
+    }
+    function fallback() { // no Clipboard API: select the code and ask the browser to copy it
+      var r = document.createRange();
+      r.selectNodeContents(chip);
+      var s = window.getSelection();
+      s.removeAllRanges();
+      s.addRange(r);
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      say(ok ? 'Copied!' : 'Press Ctrl+C to copy');
+    }
+    function copy() {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(code).then(function () { say('Copied!'); }, fallback);
+      } else {
+        fallback();
+      }
+    }
+    chip.setAttribute('role', 'button');
+    chip.setAttribute('tabindex', '0');
+    chip.setAttribute('aria-label', 'Copy code ' + code);
+    chip.style.cursor = 'pointer';
+    if (cap) cap.textContent = 'Tap to copy';
+    chip.addEventListener('click', copy);
+    chip.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); copy(); }
+    });
+  });
+}
+const TABLE_SCRIPT = '(' + tableCopyScript.toString() + ')();';
+
 // Classic (the original card generator) and Compact (experimental): the markup
 // exactly as it was before the row-style redesign, kept as a selectable fallback
 // in case the new Standard card is not wanted. Image-and-text columns use the
@@ -1843,6 +2086,7 @@ ${textBlocks}
 
 function generateHTML() {
   const blogContentId = document.getElementById('blog-content-id').value.trim();
+  if (cardStyle === 'table') return tableHTML(blogContentId);
   if (cardStyle === 'pick') {
     // Full-width rows, so always the plain vertical container (never the
     // Bulma multi-column grid), plus the hooks the page script looks for.
@@ -3695,6 +3939,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('style-classic-btn').addEventListener('click', () => setCardStyle('classic'));
   document.getElementById('style-compact-btn').addEventListener('click', () => setCardStyle('compact'));
   document.getElementById('style-pick-btn').addEventListener('click', () => setCardStyle('pick'));
+  document.getElementById('style-table-btn').addEventListener('click', () => setCardStyle('table'));
+  document.getElementById('details-on-btn').addEventListener('click', () => setShowDetails(true));
+  document.getElementById('details-off-btn').addEventListener('click', () => setShowDetails(false));
   document.getElementById('cp-bar-on-btn').addEventListener('click', () => setCpBar(true));
   document.getElementById('cp-bar-off-btn').addEventListener('click', () => setCpBar(false));
   document.getElementById('end-on-btn').addEventListener('click', () => setShowEndDates(true));
@@ -3726,7 +3973,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btn.dataset.action === 'restore-desc') restoreDescription(btn.dataset.id);
   });
   tbody.addEventListener('input', e => {
-    if (e.target.matches('.cta-input')) updateCTA(e.target.dataset.id, e.target.value);
+    if (e.target.matches('.code-input')) updateCode(e.target.dataset.id, e.target.value);
+    else if (e.target.matches('.cta-input')) updateCTA(e.target.dataset.id, e.target.value);
   });
   tbody.addEventListener('keydown', e => {
     if (e.target.matches('.pos-input') && e.key === 'Enter') {
