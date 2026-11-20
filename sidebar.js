@@ -3721,6 +3721,8 @@ function initDailyCounter() {
  * re-fetch every time. A failed fetch (offline, repo made private again)
  * just means no banner. */
 const UPDATE_MANIFEST_URL = 'https://raw.githubusercontent.com/jramhold514/dealnews-blog-card-extension/main/manifest.json';
+// The newest code as a zip, for people who installed from a download instead of git clone.
+const UPDATE_ZIP_URL = 'https://github.com/jramhold514/dealnews-blog-card-extension/archive/refs/heads/main.zip';
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 
@@ -3761,9 +3763,11 @@ async function checkForUpdate() {
   const text = document.getElementById('update-banner-text');
   text.textContent = '';
   text.append(
-    `Update available: ${latest} (you have ${installed}). In the extension folder run `,
+    `Update available: ${latest} (you have ${installed}). Installed with git? In the extension folder run `,
     Object.assign(document.createElement('code'), { textContent: 'git pull' }),
-    ', then reload it at chrome://extensions and reopen this panel.'
+    '. Installed from a zip? ',
+    Object.assign(document.createElement('a'), { textContent: 'Download the new zip', href: UPDATE_ZIP_URL, target: '_blank', rel: 'noopener' }),
+    ' and copy its files over the same folder. Then reload the extension at chrome://extensions and reopen this panel.'
   );
   banner.dataset.latest = latest;
   banner.style.display = '';
