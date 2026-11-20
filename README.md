@@ -5,6 +5,8 @@ A Chrome sidebar extension for DealNews editorial use. It does two things:
 1. **Card generator** — look up offers in DatoCMS and generate styled `.bu-card` HTML for longform articles.
 2. **Article scanner** — read an article's HTML out of the CMS editor, check each deal card's expiration status against DatoCMS, flag/remove/reorder stale cards, and regenerate clean HTML to paste back in.
 
+3. **Monetized links** — turn a normal web address into a monetized DealNews link (the sidebar's **Links** tab), and do the same from inside the SEO audit's HTML working copies. For the working copies, open `chrome://extensions`, click Details on this extension, and switch on **Allow access to file URLs**. The Links tab needs the magic URL token and your email once (saved only in this browser).
+
 It's a plain Manifest V3 extension — vanilla JS/HTML/CSS, no build step, no dependencies.
 
 ## Installing

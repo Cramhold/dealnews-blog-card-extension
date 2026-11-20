@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DealNews Blog Card Editor",
-  "version": "2.36.1",
+  "version": "2.37.0",
   "description": "Sidebar tool for generating deal cards and managing expired deals in longform articles.",
   "permissions": [
     "sidePanel",
@@ -14,7 +14,8 @@
     "https://site-api.datocms.com/*",
     "https://graphql.datocms.com/*",
     "https://api.dealnews.com/*",
-    "https://secure.dealnews.com/*"
+    "https://secure.dealnews.com/*",
+    "https://url-service.dealnews.net/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -23,6 +24,11 @@
     {
       "matches": ["https://secure.dealnews.com/*"],
       "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["file:///*"],
+      "js": ["bridge.js"],
       "run_at": "document_idle"
     }
   ],

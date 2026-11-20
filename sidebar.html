@@ -56,6 +56,7 @@
     <button class="tab active" id="tab-configure" data-tab="configure">Configure</button>
     <button class="tab" id="tab-processor" data-tab="processor">Processor</button>
     <button class="tab" id="tab-article"   data-tab="article">Article</button>
+    <button class="tab" id="tab-links"     data-tab="links">Links</button>
   </div>
 
   <!-- Change Log — records what the Processor and Article tabs actually did to HTML -->
@@ -294,6 +295,39 @@
     </div>
   </div>
 
+  <!-- ── Links: monetized links through the magic URL service ── -->
+  <div class="pane" id="pane-links">
+    <p class="processor-desc">Turn normal web addresses into monetized DealNews links. One per line: <code>Link text / address</code>, or just an address.</p>
+
+    <div class="proc-card">
+      <div class="links-settings">
+        <div class="links-field">
+          <label class="proc-label" for="links-token">Magic URL token</label>
+          <input type="password" id="links-token" autocomplete="off" placeholder="Paste once, kept in this browser" />
+        </div>
+        <div class="links-field">
+          <label class="proc-label" for="links-email">Your email</label>
+          <input type="text" id="links-email" autocomplete="off" placeholder="name@dealnews.com" />
+        </div>
+        <span class="token-status" id="links-status">—</span>
+      </div>
+    </div>
+
+    <div class="proc-card">
+      <label class="proc-label" for="links-input">Links</label>
+      <textarea id="links-input" rows="5" placeholder="Use Promo Code / https://www.aliexpress.us/&#10;https://www.target.com/"></textarea>
+      <label class="links-check"><input type="checkbox" id="links-button" /> Make them buttons (adds the CTA button classes)</label>
+    </div>
+
+    <div class="proc-btn-row">
+      <button class="primary" id="links-make-btn">Make links</button>
+      <button id="links-clear-btn">Clear</button>
+      <button id="links-copyall-btn" class="small" style="display:none;">Copy all tags</button>
+    </div>
+
+    <div id="links-results"></div>
+  </div>
+
   <!-- ── Article ── -->
   <div class="pane" id="pane-article">
 
@@ -441,6 +475,7 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="magic-link.js"></script>
 <script src="sidebar.js"></script>
 </body>
 </html>

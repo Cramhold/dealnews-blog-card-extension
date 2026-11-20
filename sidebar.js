@@ -182,7 +182,7 @@ function renderTrackingLinkBanner(prefix, matches) {
 
 /* ─── Tabs ─── */
 function setTab(tab) {
-  ['configure', 'processor', 'article'].forEach(t => {
+  ['configure', 'processor', 'article', 'links'].forEach(t => {
     document.getElementById('pane-' + t).className = 'pane' + (t === tab ? ' active' : '');
     document.getElementById('tab-' + t).className = 'tab' + (t === tab ? ' active' : '');
   });
@@ -3875,6 +3875,174 @@ function escText(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(NBSP_PATTERN, '&nbsp;');
 }
 
+/* ─── Links tab: monetized links through the magic URL service ───
+ * One link = a landing address run through the magic URL service (magic-link.js),
+ * then written out as the <a> the CMS expects. The tokens live in
+ * chrome.storage.local (this browser only, never synced, never written into
+ * generated output). Anything the service cannot monetize is flagged, not guessed. */
+let linksRows = [];   // [{ text, url, button, selection, res, tag }]
+
+function linksSettings() {
+  return {
+    token: document.getElementById('links-token').value.trim(),
+    email: document.getElementById('links-email').value.trim(),
+  };
+}
+
+function updateLinksStatus() {
+  const s = linksSettings(), st = document.getElementById('links-status');
+  const ok = !!(s.token && s.email && getToken());
+  st.textContent = ok ? '✓ ready' : (!getToken() ? 'needs DatoCMS token above' : '—');
+  st.className = ok ? 'token-status ok' : 'token-status';
+}
+
+// "Use Promo Code / https://example.com/" or just "https://example.com/".
+function parseLinkLine(line) {
+  const t = line.trim();
+  if (!t) return null;
+  const m = t.match(/^(.*?)\s+\/\s+(\S+)$/);
+  if (m) return { text: m[1].trim(), url: m[2] };
+  return { text: '', url: t };
+}
+
+function linkRowTag(row) {
+  const r = row.res;
+  if (!r || !r.ok) return '';
+  const text = row.text || r.vendorName || r.landing;
+  return DNMagic.buildTag({ href: r.href, vendor: r.vendorLegacyId, landing: r.landing, info: r.info, text, button: row.button });
+}
+
+async function resolveLinkRow(row) {
+  const s = linksSettings();
+  row.res = await DNMagic.resolveLink({ url: row.url, token: s.token, email: s.email, datoToken: getToken(), selection: row.selection });
+  row.tag = linkRowTag(row);
+}
+
+function renderLinks() {
+  const box = document.getElementById('links-results');
+  box.textContent = '';
+  linksRows.forEach((row, i) => {
+    const r = row.res;
+    const card = document.createElement('div');
+    card.className = 'proc-card links-row' + (r && r.ok ? ' ok' : (r ? ' bad' : ''));
+
+    const head = document.createElement('div');
+    head.className = 'links-row-head';
+    head.textContent = (row.text ? row.text + ' → ' : '') + row.url;
+    card.appendChild(head);
+
+    if (!r) {
+      const p = document.createElement('div'); p.className = 'links-note'; p.textContent = 'Working…'; card.appendChild(p);
+    } else {
+      (r.flags || []).forEach(f => {
+        const d = document.createElement('div');
+        d.className = 'links-flag ' + f.level;
+        d.textContent = (f.level === 'stop' ? 'Stopped: ' : 'Note: ') + f.msg;
+        card.appendChild(d);
+      });
+      if (r.options && r.options.length > 1) {
+        const sel = document.createElement('select');
+        sel.className = 'links-program';
+        sel.dataset.index = String(i);
+        r.options.forEach(o => {
+          const op = document.createElement('option');
+          op.value = String(o.value); op.textContent = o.clean || o.label;
+          if (String(o.value) === String(r.selection)) op.selected = true;
+          sel.appendChild(op);
+        });
+        const lab = document.createElement('label'); lab.className = 'links-note'; lab.textContent = 'Program: ';
+        lab.appendChild(sel);
+        card.appendChild(lab);
+      }
+      if (r.ok) {
+        const meta = document.createElement('div');
+        meta.className = 'links-note';
+        meta.textContent = (r.vendorName || 'Vendor') + ' (' + r.vendorLegacyId + ') · ' + r.info;
+        card.appendChild(meta);
+        const ta = document.createElement('textarea');
+        ta.readOnly = true; ta.rows = 3; ta.value = row.tag;
+        card.appendChild(ta);
+        const b = document.createElement('button');
+        b.className = 'small'; b.textContent = 'Copy tag'; b.dataset.copy = String(i);
+        card.appendChild(b);
+      }
+    }
+    box.appendChild(card);
+  });
+  const okCount = linksRows.filter(r => r.res && r.res.ok).length;
+  document.getElementById('links-copyall-btn').style.display = okCount ? '' : 'none';
+}
+
+async function makeLinks() {
+  const s = linksSettings();
+  if (!s.token || !s.email) { showToast('Add the magic URL token and your email first.', true); return; }
+  if (!getToken()) { showToast('Add the DatoCMS token in the bar above first (it looks up the vendor).', true); return; }
+  const asButton = document.getElementById('links-button').checked;
+  const parsed = document.getElementById('links-input').value.split('\n').map(parseLinkLine).filter(Boolean);
+  if (!parsed.length) { showToast('Nothing to make: add at least one address.', true); return; }
+  linksRows = parsed.map(p => ({ text: p.text, url: p.url, button: asButton, selection: null, res: null, tag: '' }));
+  renderLinks();
+  const btn = document.getElementById('links-make-btn');
+  btn.disabled = true;
+  try {
+    // Three at a time, so a long list does not hammer the service.
+    let next = 0;
+    const worker = async () => {
+      while (next < linksRows.length) {
+        const row = linksRows[next++];
+        try { await resolveLinkRow(row); }
+        catch (e) { row.res = { ok: false, flags: [{ code: 'service', level: 'stop', msg: e.message }], options: [] }; }
+        renderLinks();
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+  } finally { btn.disabled = false; }
+  const ok = linksRows.filter(r => r.res && r.res.ok).length;
+  logChange('Links', `Made ${ok} of ${linksRows.length} monetized link${linksRows.length === 1 ? '' : 's'}`,
+    linksRows.map(r => (r.res && r.res.ok ? 'OK: ' : 'Flagged: ') + r.url));
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch (e) { return false; }
+}
+
+function initLinks() {
+  const tok = document.getElementById('links-token');
+  const em  = document.getElementById('links-email');
+  chrome.storage.local.get(['magicToken', 'magicEmail'], r => {
+    if (r.magicToken) tok.value = r.magicToken;
+    if (r.magicEmail) em.value = r.magicEmail;
+    updateLinksStatus();
+  });
+  tok.addEventListener('change', () => { chrome.storage.local.set({ magicToken: tok.value.trim() }); updateLinksStatus(); });
+  em.addEventListener('change',  () => { chrome.storage.local.set({ magicEmail: em.value.trim() }); updateLinksStatus(); });
+  document.getElementById('token-input').addEventListener('change', updateLinksStatus);
+  document.getElementById('links-make-btn').addEventListener('click', makeLinks);
+  document.getElementById('links-clear-btn').addEventListener('click', () => {
+    document.getElementById('links-input').value = '';
+    linksRows = []; renderLinks();
+  });
+  document.getElementById('links-copyall-btn').addEventListener('click', async () => {
+    const all = linksRows.filter(r => r.res && r.res.ok).map(r => r.tag).join('\n');
+    showToast(all && await copyText(all) ? 'Copied all tags.' : 'Copy failed.', !all);
+  });
+  document.getElementById('links-results').addEventListener('click', async e => {
+    const b = e.target.closest('button[data-copy]');
+    if (!b) return;
+    const row = linksRows[Number(b.dataset.copy)];
+    showToast(row && await copyText(row.tag) ? 'Copied the tag.' : 'Copy failed.', !(row && row.tag));
+  });
+  document.getElementById('links-results').addEventListener('change', async e => {
+    const sel = e.target.closest('select.links-program');
+    if (!sel) return;
+    const row = linksRows[Number(sel.dataset.index)];
+    row.selection = sel.value; row.res = null; renderLinks();
+    try { await resolveLinkRow(row); } catch (err) { row.res = { ok: false, flags: [{ code: 'service', level: 'stop', msg: err.message }], options: [] }; }
+    renderLinks();
+  });
+}
+
 /* ─── Wire up all event listeners ─── */
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -3893,6 +4061,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Token + persisted settings
   initToken();
+  initLinks();
   initUpdateCheck();
   initBlogIdDetection();
   initDailyCounter();
