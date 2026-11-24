@@ -507,7 +507,11 @@ async function addOfferById() {
  * offer becomes exactly the same card as one typed in by ID. See "Find offers"
  * in CLAUDE.md. */
 const FIND_PAGE_SIZE = 30;
-let findState = { items: [], vendors: [], remaining: 0, loaded: 0, busy: false, selected: new Set() };
+// excluded: vendor_id (string) -> display name, for the vendors the editor clicked twice. The content API has no
+// "not this vendor" parameter (probed 2026-11-24: unknown parameters are ignored), so exclusion is applied here to
+// the loaded results, and runFind() keeps loading pages until enough non-excluded offers are on screen.
+let findState = { items: [], vendors: [], remaining: 0, loaded: 0, busy: false, selected: new Set(), excluded: new Map() };
+const FIND_FILL_PASSES = 6;   // most extra pages runFind() will load to make up for excluded vendors
 
 function findParams(offset) {
   const p = [];
@@ -540,19 +544,26 @@ async function runFind(append) {
   document.getElementById('find-btn').disabled = true;
   msg.textContent = '';
   try {
-    const res = await fetch(`${DN_CONTENT_API}?${qs}`, { headers: { Authorization: DN_CONTENT_API_AUTH } });
-    if (!res.ok) throw new Error(`the site's content API answered ${res.status}`);
-    const data = await res.json();
-    const got = Array.isArray(data.content) ? data.content : [];
-    if (!append) { findState.items = []; findState.selected = new Set(); }
-    const have = new Set(findState.items.map(o => String(o.id)));
-    got.forEach(o => { if (!have.has(String(o.id))) findState.items.push(o); });
-    findState.loaded += got.length;
-    if (!append) findState.loaded = got.length;
-    findState.remaining = (data.additional_content_ids || []).length;
-    if (Array.isArray(data.vendors)) findState.vendors = data.vendors;
+    if (!append) { findState.items = []; findState.selected = new Set(); findState.loaded = 0; }
+    let pass = 0;
+    do {
+      const res = await fetch(`${DN_CONTENT_API}?${findParams(findState.loaded)}`, { headers: { Authorization: DN_CONTENT_API_AUTH } });
+      if (!res.ok) throw new Error(`the site's content API answered ${res.status}`);
+      const data = await res.json();
+      const got = Array.isArray(data.content) ? data.content : [];
+      const have = new Set(findState.items.map(o => String(o.id)));
+      got.forEach(o => { if (!have.has(String(o.id))) findState.items.push(o); });
+      findState.loaded += got.length;
+      findState.remaining = (data.additional_content_ids || []).length;
+      if (Array.isArray(data.vendors)) findState.vendors = data.vendors;
+      pass++;
+      // excluded vendors are hidden after loading, so top the list back up while there are more pages to load
+    } while (findState.excluded.size && findState.remaining > 0 && findVisibleItems().length < FIND_PAGE_SIZE && pass < FIND_FILL_PASSES);
     if (!findState.items.length) {
       msg.textContent = 'No live offers matched. Try fewer filters, or tick "include expired".';
+      msg.className = 'msg warn';
+    } else if (!findVisibleItems().length) {
+      msg.textContent = 'Everything loaded is from an excluded store. Click an excluded store again to bring it back' + (findState.remaining ? ', or load more.' : '.');
       msg.className = 'msg warn';
     }
   } catch (e) {
@@ -594,6 +605,44 @@ function findSortedItems() {
   return items;
 }
 
+// The sorted results minus any excluded vendor's offers. An offer from the vendor typed/clicked into
+// "Vendor ID" is never hidden, so a stale exclusion can't blank out the search it contradicts.
+function findVisibleItems() {
+  if (!findState.excluded.size) return findSortedItems();
+  const only = document.getElementById('find-vendor').value.trim();
+  return findSortedItems().filter(o => {
+    const vid = o.vendor && o.vendor.vendor_id != null ? String(o.vendor.vendor_id) : '';
+    return !vid || vid === only || !findState.excluded.has(vid);
+  });
+}
+
+// Vendor chip: three states by clicking, off -> "only this store" -> "not this store" -> off.
+function findChipClick(vid, name) {
+  const input = document.getElementById('find-vendor');
+  const current = input.value.trim();
+  if (findState.excluded.has(vid)) {
+    // excluded -> off: its offers are already loaded, so no new search is needed
+    findState.excluded.delete(vid);
+    renderFindResults();
+  } else if (vid === current) {
+    // only -> excluded: drop the vendor filter and search again without it (if anything else is left to search by)
+    input.value = '';
+    findState.excluded.set(vid, name);
+    if (findParams(0)) runFind(false);
+    else {
+      renderFindResults();
+      const msg = document.getElementById('find-msg');
+      msg.textContent = `Excluding ${name} needs something else to search by (words, a category or a facet).`;
+      msg.className = 'msg warn';
+    }
+  } else {
+    // off -> only this store (it replaces any other "only" store)
+    findState.excluded.delete(vid);
+    input.value = vid;
+    runFind(false);
+  }
+}
+
 function renderFindResults() {
   const list = document.getElementById('find-results');
   const chips = document.getElementById('find-vendors');
@@ -602,22 +651,41 @@ function renderFindResults() {
   chips.textContent = '';
   const added = new Set(offers.map(o => String(o.legacyId)));
 
-  // vendor chips: the vendors in the current results, with counts; a click filters to that vendor
+  // vendor chips: the vendors in the current results, with counts. Click once to show only that store,
+  // twice to exclude it, a third time to clear. Excluded stores stay listed even when the current
+  // results no longer include them, so there is always a way to undo.
   const currentVendor = document.getElementById('find-vendor').value.trim();
-  (findState.vendors || []).slice(0, 12).forEach(v => {
+  const vendorList = (findState.vendors || []).slice(0, 12).map(v => ({ id: String(v.vendor_id), name: v.short_name || v.name, count: v.count }));
+  findState.excluded.forEach((name, id) => { if (!vendorList.some(v => v.id === id)) vendorList.push({ id, name, count: null }); });
+  vendorList.forEach(v => {
+    const out = findState.excluded.has(v.id);
+    const on = !out && v.id === currentVendor;
     const b = document.createElement('button');
-    b.className = 'small find-chip' + (String(v.vendor_id) === currentVendor ? ' on' : '');
-    b.textContent = `${v.short_name || v.name} (${v.count})`;
-    b.title = `Only ${v.name}`;
-    b.addEventListener('click', () => {
-      document.getElementById('find-vendor').value = String(v.vendor_id) === currentVendor ? '' : String(v.vendor_id);
-      runFind(false);
-    });
+    b.className = 'small find-chip' + (on ? ' on' : '') + (out ? ' off' : '');
+    b.textContent = (out ? '✕ ' : '') + v.name + (v.count != null ? ` (${v.count})` : '');
+    b.title = out ? `${v.name} is excluded. Click to clear.` : on ? `Only ${v.name}. Click again to exclude it.` : `Click: only ${v.name}. Click twice: exclude it.`;
+    b.setAttribute('aria-pressed', out ? 'mixed' : on ? 'true' : 'false');
+    b.addEventListener('click', () => findChipClick(v.id, v.name));
     chips.appendChild(b);
   });
+  if (findState.excluded.size || currentVendor) {
+    const clr = document.createElement('button');
+    clr.className = 'small find-chip-clear';
+    clr.textContent = 'Clear store filters';
+    clr.addEventListener('click', () => {
+      const hadOnly = !!document.getElementById('find-vendor').value.trim();
+      document.getElementById('find-vendor').value = '';
+      findState.excluded = new Map();
+      if (hadOnly && findParams(0)) runFind(false); else renderFindResults();
+    });
+    chips.appendChild(clr);
+  }
 
-  const items = findSortedItems();
-  bar.style.display = items.length ? 'flex' : 'none';
+  const items = findVisibleItems();
+  // hidden offers can't stay ticked
+  const shown = new Set(items.map(o => String(o.id)));
+  findState.selected.forEach(id => { if (!shown.has(id)) findState.selected.delete(id); });
+  bar.style.display = findState.items.length ? 'flex' : 'none';
   items.forEach(o => {
     const id = String(o.id);
     const isAdded = added.has(id);
@@ -678,15 +746,60 @@ function updateFindCount() {
   const btn = document.getElementById('find-add-btn');
   btn.textContent = n ? `Add ${n} selected` : 'Add selected';
   btn.disabled = n === 0;
+  const visible = findVisibleItems().length;
+  const hidden = findState.items.length - visible;
   document.getElementById('find-count').textContent = findState.items.length
-    ? `${findState.items.length} shown` + (findState.remaining ? `, ${findState.remaining} more` : '')
+    ? `${visible} shown` + (hidden ? ` (${hidden} excluded)` : '') + (findState.remaining ? `, ${findState.remaining} more` : '')
     : '';
+  updateFindIds();
+}
+
+// The reverse of the "Dato/Legacy IDs" box above: the found offers as a comma-separated list of legacy IDs.
+// It covers the ticked offers when any are ticked, otherwise every offer shown (excluded stores left out).
+// Only offers already loaded are listed; "Load more" brings in the rest.
+function findExportIds() {
+  const shown = findVisibleItems().map(o => String(o.id));
+  if (!findState.selected.size) return { ids: shown, scope: 'all shown' };
+  return { ids: shown.filter(id => findState.selected.has(id)), scope: 'ticked' };
+}
+
+function updateFindIds() {
+  const box = document.getElementById('find-ids');
+  const { ids, scope } = findExportIds();
+  box.style.display = ids.length ? 'block' : 'none';
+  document.getElementById('find-ids-label').textContent = `${ids.length} legacy ID${ids.length !== 1 ? 's' : ''} (${scope})` + (findState.remaining && scope === 'all shown' ? `, ${findState.remaining} more not loaded` : '');
+  document.getElementById('find-ids-out').value = ids.join(', ');
+}
+
+function findCopyIds() {
+  const text = document.getElementById('find-ids-out').value;
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('find-ids-copy');
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 2000);
+  });
+}
+
+// "Cards -> HTML": the same IDs go through the existing Add path, then the HTML view opens with the full output.
+async function findExportHtml() {
+  const { ids } = findExportIds();
+  if (!ids.length) return;
+  document.getElementById('id-input').value = ids.join(', ');
+  findState.selected = new Set();
+  await addOfferById();
+  renderFindResults();
+  const err = document.getElementById('add-err');
+  // "already added" is fine here (they are in the list already); any other failure keeps the Edit view open so the errors are seen
+  const realErrors = err.style.display === 'none' ? [] : err.textContent.split(' · ').filter(e => !/already added$/.test(e));
+  if (offers.length && !realErrors.length) setSubTab('html');
 }
 
 function findSelectAll(on) {
   const added = new Set(offers.map(o => String(o.legacyId)));
   findState.selected = new Set();
-  if (on) findState.items.forEach(o => { if (!added.has(String(o.id)) && !o.expired) findState.selected.add(String(o.id)); });
+  if (on) findVisibleItems().forEach(o => { if (!added.has(String(o.id)) && !o.expired) findState.selected.add(String(o.id)); });
   renderFindResults();
 }
 
@@ -4102,6 +4215,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('find-all-btn').addEventListener('click',  () => findSelectAll(true));
   document.getElementById('find-none-btn').addEventListener('click', () => findSelectAll(false));
   document.getElementById('find-add-btn').addEventListener('click', findAddSelected);
+  document.getElementById('find-ids-copy').addEventListener('click', findCopyIds);
+  document.getElementById('find-html-btn').addEventListener('click', findExportHtml);
+  document.getElementById('find-ids-out').addEventListener('focus', e => e.target.select());
   document.getElementById('sort-asc-btn').addEventListener('click',  () => sortOffers('asc'));
   document.getElementById('sort-desc-btn').addEventListener('click', () => sortOffers('desc'));
   document.getElementById('sort-auto-btn').addEventListener('click', () => sortOffers('auto'));
