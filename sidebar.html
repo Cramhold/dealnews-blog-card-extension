@@ -106,7 +106,7 @@
 
       <details class="find-panel" id="find-panel">
         <summary>Find offers to add</summary>
-        <p class="find-help">Searches the site's live offers (the same feed the programmatic pages use). Tick the ones you want, then Add selected: they go through the same path as typing their IDs above.</p>
+        <p class="find-help">Searches the site's live offers (the same feed the programmatic pages use). Tick the ones you want, then Add selected: they go through the same path as typing their IDs above. Click a store once to show only it, twice to leave it out. Below the results, copy the found offers as a plain list of legacy IDs, or turn them straight into cards and the full HTML.</p>
         <div class="find-grid">
           <input type="text" id="find-text" placeholder="Words, e.g. peacock student" />
           <input type="text" id="find-category" placeholder="Category ID" inputmode="numeric" />
@@ -130,6 +130,14 @@
           <button class="small" id="find-none-btn">None</button>
           <span class="find-count" id="find-count"></span>
           <button class="small primary" id="find-add-btn" disabled>Add selected</button>
+        </div>
+        <div class="find-ids" id="find-ids" style="display:none;">
+          <div class="find-ids-label" id="find-ids-label"></div>
+          <div class="find-ids-row">
+            <input type="text" id="find-ids-out" readonly aria-label="Legacy IDs of the found offers, comma-separated" />
+            <button class="small" id="find-ids-copy" title="Copy just the legacy IDs, comma-separated (the reverse of the IDs box above)">Copy IDs</button>
+            <button class="small primary" id="find-html-btn" title="Add these offers as cards and open the HTML view with the full output">Cards → HTML</button>
+          </div>
         </div>
         <div id="find-results"></div>
         <button class="small" id="find-more" style="display:none;"></button>
