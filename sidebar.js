@@ -513,8 +513,24 @@ const FIND_PAGE_SIZE = 30;
 let findState = { items: [], vendors: [], remaining: 0, loaded: 0, busy: false, selected: new Set(), excluded: new Map() };
 const FIND_FILL_PASSES = 6;   // most extra pages runFind() will load to make up for excluded vendors
 
+// "Creator" box: a creator's page link (https://www.dealnews.com/creators/Andy-Frank/184.html) or just its ID, several
+// separated by commas or spaces. The content API's creator_id filter (probed 2026-11-25; takes a comma list and combines
+// with search, category, facet and vendor) returns every live offer the creator picked, not just the 20 their page lists,
+// and includes picks where they are the second creator on the offer.
+function findCreatorIds() {
+  const ids = [], bad = [];
+  document.getElementById('find-creator').value.split(/[\s,]+/).filter(Boolean).forEach(tok => {
+    const m = tok.match(/\/(?:creators|authors)\/[^/?#]*\/(\d+)(?:\.html)?(?:[?#].*)?$/i) || tok.match(/^(\d+)$/);
+    if (!m) bad.push(tok);
+    else if (!ids.includes(m[1])) ids.push(m[1]);
+  });
+  return { ids, bad };
+}
+
 function findParams(offset) {
   const p = [];
+  const creators = findCreatorIds().ids;
+  if (creators.length) p.push('creator_id=' + creators.join(','));
   const text = document.getElementById('find-text').value.trim();
   const cat  = document.getElementById('find-category').value.trim();
   const fac  = document.getElementById('find-facet').value.trim();
@@ -525,6 +541,9 @@ function findParams(offset) {
   if (ven)  p.push('vendor_id=' + encodeURIComponent(ven));
   if (!p.length) return null;
   if (document.getElementById('find-expired').checked) p.push('expired=1');
+  // "Hottest first" is asked of the API too (probed 2026-11-25: sort=hotness orders the whole result set, roughly), so the
+  // first page is the hottest of ALL matches instead of the hottest of whatever 30 the site order happened to load.
+  if (document.getElementById('find-sort').value === 'hot') p.push('sort=hotness');
   p.push('count=' + FIND_PAGE_SIZE);
   if (offset) p.push('start=' + offset);
   return p.join('&');
@@ -533,9 +552,14 @@ function findParams(offset) {
 async function runFind(append) {
   const msg = document.getElementById('find-msg');
   if (findState.busy) return;
+  if (findCreatorIds().bad.length) {
+    msg.textContent = 'Could not read a creator ID from "' + findCreatorIds().bad.join(' ') + '". Paste the creator page link (…/creators/Andy-Frank/184.html) or just the number.';
+    msg.className = 'msg warn';
+    return;
+  }
   const qs = findParams(append ? findState.loaded : 0);
   if (!qs) {
-    msg.textContent = 'Enter a search, a category, a facet or a vendor first.';
+    msg.textContent = 'Enter a search, a creator, a category, a facet or a vendor first.';
     msg.className = 'msg warn';
     return;
   }
@@ -545,6 +569,7 @@ async function runFind(append) {
   msg.textContent = '';
   try {
     if (!append) { findState.items = []; findState.selected = new Set(); findState.loaded = 0; }
+    findState.sortSent = document.getElementById('find-sort').value;
     let pass = 0;
     do {
       const res = await fetch(`${DN_CONTENT_API}?${findParams(findState.loaded)}`, { headers: { Authorization: DN_CONTENT_API_AUTH } });
@@ -562,6 +587,14 @@ async function runFind(append) {
     if (!findState.items.length) {
       msg.textContent = 'No live offers matched. Try fewer filters, or tick "include expired".';
       msg.className = 'msg warn';
+    } else if (findVisibleItems().length && findCreatorIds().ids.length) {
+      // say whose picks these are and how many there are in all (the creator page itself lists only 20)
+      const names = findCreatorIds().ids.map(id => {
+        const hit = findState.items.find(o => o.author && String(o.author.author_id) === id);
+        return hit ? hit.author.name : 'creator ' + id;
+      });
+      msg.textContent = `Picks by ${names.join(' and ')}: ${findState.items.length + findState.remaining} offers match.`;
+      msg.className = 'msg';
     } else if (!findVisibleItems().length) {
       msg.textContent = 'Everything loaded is from an excluded store. Click an excluded store again to bring it back' + (findState.remaining ? ', or load more.' : '.');
       msg.className = 'msg warn';
@@ -718,6 +751,7 @@ function renderFindResults() {
     const bits = [];
     if (o.call_out) bits.push(o.call_out);
     if (o.vendor && o.vendor.name) bits.push(o.vendor.name);
+    if (o.editors_choice && o.author && o.author.name) bits.push('pick by ' + o.author.name);
     bits.push(ends.text);
     if (o.hotness) bits.push('hotness ' + o.hotness);
     if (Array.isArray(o.coupon_code) && o.coupon_code.length) bits.push('code');
@@ -4207,10 +4241,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // Configure → Find offers
   document.getElementById('find-btn').addEventListener('click', () => runFind(false));
   document.getElementById('find-more').addEventListener('click', () => runFind(true));
-  ['find-text', 'find-category', 'find-facet', 'find-vendor'].forEach(id => {
+  ['find-text', 'find-creator', 'find-category', 'find-facet', 'find-vendor'].forEach(id => {
     document.getElementById(id).addEventListener('keydown', e => { if (e.key === 'Enter') runFind(false); });
   });
-  document.getElementById('find-sort').addEventListener('change', renderFindResults);
+  document.getElementById('find-sort').addEventListener('change', () => {
+    // hotness is also sent to the API, so changing to or from it with more pages unloaded needs a fresh search
+    if (findState.items.length && findState.remaining > 0 && (findState.sortSent === 'hot') !== (document.getElementById('find-sort').value === 'hot')) runFind(false);
+    else renderFindResults();
+  });
   document.getElementById('find-expired').addEventListener('change', () => { if (findState.items.length) runFind(false); });
   document.getElementById('find-all-btn').addEventListener('click',  () => findSelectAll(true));
   document.getElementById('find-none-btn').addEventListener('click', () => findSelectAll(false));
