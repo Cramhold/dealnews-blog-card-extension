@@ -24,7 +24,7 @@ Bump `"version"` in `manifest.json` (semver) whenever a change lands that alters
 - Minor (`x.MINOR.x`) — new functionality, non-breaking additions
 - Major (`MAJOR.x.x`) — significant overhauls or breaking changes to how a tab/flow works
 
-Currently at `2.39.0`. Each bump gets a short entry at the top of CHANGELOG.md (what changed and why, function names). Don't put version history in this file.
+Currently at `2.39.1`. Each bump gets a short entry at the top of CHANGELOG.md (what changed and why, function names). Don't put version history in this file.
 
 ## Architecture
 
@@ -67,7 +67,7 @@ Each one comes from a past bug.
 - **Escaping:** `esc()` for attributes, `escText()` for text (it writes `&nbsp;` and leaves quotes alone). `dastNodeToHTML()` output is trusted HTML; don't escape it again.
 - **Match classes by token** (`.btn-cta`, `.bu-content.bu-is-flex-grow-1`), never by exact `class` string or tag name.
 - **Classic and Compact are frozen:** `legacyCardHTML()` must stay byte-identical to the original generator, indentation included.
-- **Page scripts** (`cardMoreScript()`, `cardSortScript()`, `tableCopyScript()`, Live Feed) use DOM calls and `textContent` only. No `<tag`-shaped text in the source, no outside references, ES5 only.
+- **Page scripts** (`cardMoreScript()`, `cardSortScript()`, `tableCopyScript()`, Live Feed) use DOM calls and `textContent` only. No `<tag`-shaped text in the source, no outside references, ES5 only. Never two `''` on one line: the CMS editor reads a pair as wiki italics and writes `<i>` into the script.
 - **`setTab()` and `setSubTab()` stay separate** functions with separate name arrays.
 - **Network data goes in with `textContent`**, never `innerHTML`.
 - **Tokens** (`datoToken`, `magicToken`) never go into the repo, generated output, or a page.

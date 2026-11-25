@@ -2038,7 +2038,8 @@ function cardSortScript() {
       chips.setAttribute('role', 'group');
       chips.setAttribute('aria-label', 'Filter by creator');
       chips.style.cssText = 'display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none';
-      chip(chips, 'All picks', '', '');
+      // No two '' on one line: the CMS editor reads a pair of them as wiki italics and writes <i></i> into the script.
+      chip(chips, 'All picks', String(), null);
       creators.forEach(function (n) { chip(chips, chipLabel(n), n, faces[n]); });
       bar.appendChild(chips);
     }
