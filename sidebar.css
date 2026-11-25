@@ -824,7 +824,7 @@ tr.row-locked .pos-input { opacity: 0.4; pointer-events: none; }
 .find-help { font-size: 10px; color: var(--text-faint); margin: 6px 0; }
 .find-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
 .find-grid input[type="text"] { grid-column: auto; }
-.find-grid #find-text { grid-column: 1 / -1; }
+.find-grid #find-text, .find-grid #find-creator { grid-column: 1 / -1; }
 .find-panel input[type="text"] {
   width: 100%; padding: 6px 8px; font-size: 12px; font-family: var(--sans);
   background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); outline: none;
